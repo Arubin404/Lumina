@@ -1,0 +1,19 @@
+La aplicación de caja contable debe funcionar únicamente en Windows, con un diseño en modo oscuro moderno y visualmente atractivo.
+
+La caja física siempre debe estar sincronizada en tiempo real. Cada ingreso o salida de dinero debe reflejarse inmediatamente en el saldo de caja. Al registrar dinero, el usuario debe especificar el tipo de billete o moneda y la cantidad exacta. Si no existen billetes o monedas de ese tipo disponibles, la aplicación debe mostrar advertencias o desactivar la opción para evitar inconsistencias.
+
+Ingresos: se registran con el detalle o propósito, las denominaciones utilizadas y la fecha (por defecto la del día actual, pero editable). Ejemplo: un float de \$300 debe registrarse como 15 billetes de \$20.
+
+Salidas: al iniciar una salida se debe registrar el propósito inicial, el monto entregado y las denominaciones específicas de los billetes o monedas entregados. La salida quedará como pendiente hasta ser completada. Al completarla, el usuario podrá agregar una o varias facturas, cada una con detalle, monto y fecha. Además, el usuario debe registrar el vuelto entregado especificando exactamente con qué billetes y monedas fue devuelto (ejemplo: un billete de 10 y uno de 5, o varias monedas). El sistema debe validar que la suma de las facturas más el vuelto entregado corresponda al monto original de la salida.
+
+Movimientos: deben listarse todos los registros, incluyendo ingresos, salidas pendientes, salidas completadas y ediciones. En caso de edición, siempre se debe mostrar una advertencia visible. Dentro del apartado de “Salidas” solo se mostrarán las salidas completadas con sus facturas. En el apartado de “Ingresos” únicamente se mostrarán los registros de entrada de dinero.
+
+Reportes mensuales: el sistema debe generar un archivo Excel con el formato establecido. El encabezado debe contener el mes y el año. Las columnas deben incluir día, voucher (número consecutivo), detalle (propósito o factura), entrada de dinero, salida de dinero (solo facturas, no el monto entregado inicialmente) y balance acumulado después de cada movimiento. Al final de la hoja debe mostrarse el total de salidas del mes y el balance final en caja.
+
+Vouchers: cada factura o salida completada debe obtener un voucher único y consecutivo. La secuencia debe ser configurable en las opciones de la aplicación. Si el último voucher real usado fue el número 150, la aplicación debe permitir configurar que el próximo sea el 151. Si el usuario ajusta manualmente la secuencia, el sistema debe permitirlo pero mostrando advertencias claras en caso de posibles duplicados o conflictos.
+
+Dashboard: debe mostrar accesos directos a ingresos, salidas y completar salidas. También debe incluir balance físico versus balance teórico (mostrando diferencias si faltan o sobran valores por salidas pendientes), movimientos recientes y estadísticas de dinero ingresado y gastado por mes.
+
+No habrá manejo de roles ni de usuarios. La aplicación debe ser de uso directo sin autenticación ni permisos diferenciados.
+
+El objetivo es tener trazabilidad completa de cada movimiento, evitar errores en el vuelto entregado, detectar faltantes o sobrantes de dinero, y mejorar la seguridad y eficiencia en el manejo de caja para empresas, negocios pequeños o uso personal.
