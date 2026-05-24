@@ -12,6 +12,7 @@ import { Income } from "@shared/schema";
 
 export default function Ingresos() {
   const [showIncomeModal, setShowIncomeModal] = useState(false);
+  const [selectedIncomeForEdit, setSelectedIncomeForEdit] = useState<Income | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
 
   const { data: incomes, isLoading } = useQuery<Income[]>({
@@ -45,7 +46,7 @@ export default function Ingresos() {
             className="bg-success hover:bg-success/90 text-success-foreground"
             data-testid="button-new-income"
           >
-            <Plus className="mr-2 h-4 w-4" />
+            <Plus className="mr-2 size-4" />
             Nuevo Ingreso
           </Button>
         </div>
@@ -83,8 +84,8 @@ export default function Ingresos() {
                     {incomes?.length || 0}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-success/10 rounded-lg flex items-center justify-center">
-                  <Plus className="text-success h-6 w-6" />
+                <div className="size-12 bg-success/10 rounded-lg flex items-center justify-center">
+                  <Plus className="text-success size-6" />
                 </div>
               </div>
             </CardContent>
@@ -99,8 +100,8 @@ export default function Ingresos() {
                     {formatCurrency(incomes?.reduce((sum, income) => sum + income.totalAmount, 0) || 0)}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                  <Calendar className="text-primary h-6 w-6" />
+                <div className="size-12 bg-primary/10 rounded-lg flex items-center justify-center">
+                  <Calendar className="text-primary size-6" />
                 </div>
               </div>
             </CardContent>
@@ -119,8 +120,8 @@ export default function Ingresos() {
                     }).length || 0}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-warning/10 rounded-lg flex items-center justify-center">
-                  <Calendar className="text-warning h-6 w-6" />
+                <div className="size-12 bg-warning/10 rounded-lg flex items-center justify-center">
+                  <Calendar className="text-warning size-6" />
                 </div>
               </div>
             </CardContent>
@@ -145,15 +146,15 @@ export default function Ingresos() {
                     className="border border-border rounded-lg p-4 hover:bg-muted/30 transition-colors"
                     data-testid={`income-item-${income.id}`}
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-start justify-between gap-4">
                       <div className="flex-1">
-                        <div className="flex items-center space-x-3 mb-2">
+                        <div className="flex items-center gap-x-3 mb-2">
                           <Badge variant="outline" className="bg-success/10 text-success border-success/20">
                             Voucher #{income.voucherId.toString().padStart(4, "0")}
                           </Badge>
                           {income.editedAt && (
                             <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20">
-                              <Edit3 className="mr-1 h-3 w-3" />
+                              <Edit3 className="mr-1 size-3" />
                               Editado
                             </Badge>
                           )}
@@ -166,7 +167,7 @@ export default function Ingresos() {
                           </div>
                           <div>
                             <p className="text-muted-foreground">Fecha</p>
-                            <p className="font-medium">{new Date(income.date).toLocaleDateString()}</p>
+                            <p className="font-medium" suppressHydrationWarning>{new Date(income.date).toLocaleDateString()}</p>
                           </div>
                           <div>
                             <p className="text-muted-foreground">Registrado</p>
@@ -181,28 +182,38 @@ export default function Ingresos() {
                             {/* Bills */}
                             {Object.entries(income.denominations.bills).map(([denomination, count]) => {
                               if (count === 0) return null;
-                              const values: Record<string, number> = { hundred: 100, fifty: 50, twenty: 20, ten: 10, five: 5, two: 2, one: 1 };
+                              const values: Record<string, number> = { hundred: 10000, fifty: 5000, twenty: 2000, ten: 1000, five: 500, one: 100 };
                               return (
                                 <div key={denomination} className="bg-secondary/30 p-2 rounded text-center">
-                                  <p className="font-medium">${values[denomination]} x {count}</p>
-                                  <p className="text-muted-foreground">{formatCurrency(values[denomination] * count)}</p>
+                                  <p className="font-medium">${values[denomination]/100} x {count}</p>
+                                  <p className="text-muted-foreground">{formatCurrency((values[denomination] ?? 0) * (count as number))}</p>
                                 </div>
                               );
                             })}
                             {/* Coins */}
                             {Object.entries(income.denominations.coins).map(([denomination, count]) => {
                               if (count === 0) return null;
-                              const values: Record<string, number> = { five: 5, two: 2, one: 1, fifty_cents: 0.5, quarter: 0.25, dime: 0.1 };
+                              const values: Record<string, number> = { one: 100, fifty_cents: 50, quarter: 25, dime: 10, nickel: 5, penny: 1 };
                               return (
                                 <div key={denomination} className="bg-secondary/30 p-2 rounded text-center">
-                                  <p className="font-medium">${values[denomination]} x {count}</p>
-                                  <p className="text-muted-foreground">{formatCurrency(values[denomination] * count)}</p>
+                                  <p className="font-medium">${values[denomination]/100} x {count}</p>
+                                  <p className="text-muted-foreground">{formatCurrency((values[denomination] ?? 0) * (count as number))}</p>
                                 </div>
                               );
                             })}
                           </div>
                         </div>
                       </div>
+                      <Button
+                        onClick={() => setSelectedIncomeForEdit(income)}
+                        size="sm"
+                        variant="outline"
+                        className="bg-card hover:bg-accent text-foreground border-border gap-2 shrink-0"
+                        data-testid={`button-edit-income-${income.id}`}
+                      >
+                        <Edit3 className="size-4 text-primary" />
+                        Editar Ingreso
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -212,7 +223,16 @@ export default function Ingresos() {
         </Card>
       </div>
 
-      <IncomeModal open={showIncomeModal} onOpenChange={setShowIncomeModal} />
+      <IncomeModal 
+        open={showIncomeModal || !!selectedIncomeForEdit} 
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowIncomeModal(false);
+            setSelectedIncomeForEdit(null);
+          }
+        }} 
+        initialData={selectedIncomeForEdit}
+      />
     </>
   );
 }

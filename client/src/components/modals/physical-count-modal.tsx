@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { RefreshCw, AlertTriangle, CheckCircle2 } from "lucide-react";
 import DenominationInput from "@/components/denomination-input";
-import { createEmptyDenomination, calculateTotal } from "@/lib/denomination-utils";
+import { createEmptyDenomination, calculateTotal, formatCurrency } from "@/lib/denomination-utils";
 import { Denomination } from "@shared/schema";
 
 interface PhysicalCountModalProps {
@@ -41,6 +41,9 @@ export default function PhysicalCountModal({ open, onOpenChange }: PhysicalCount
       });
       queryClient.invalidateQueries({ queryKey: ["/api/cashbox"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash-adjustments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/exits"] });
       onOpenChange(false);
     },
     onError: (error) => {
@@ -53,9 +56,9 @@ export default function PhysicalCountModal({ open, onOpenChange }: PhysicalCount
   });
 
   const physicalTotal = calculateTotal(denominations);
-  const theoreticalTotal = cashBox?.totalAmount || 0;
-  const difference = physicalTotal - theoreticalTotal;
-  const hasDifference = Math.abs(difference) > 0.01;
+  const expectedPhysicalTotal = cashBox?.totalAmount || 0;
+  const difference = physicalTotal - expectedPhysicalTotal;
+  const hasDifference = Math.abs(difference) > 0;
 
   const handleSubmit = () => {
     updateCashBoxMutation.mutate(denominations);
@@ -74,22 +77,23 @@ export default function PhysicalCountModal({ open, onOpenChange }: PhysicalCount
     onOpenChange(newOpen);
   };
 
-  const formatCurrency = (amount: number) =>
-    new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(amount);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <RefreshCw className="h-5 w-5" />
+            <RefreshCw className="size-5" />
             Arqueo de Caja — Conteo Físico
           </DialogTitle>
+          <DialogDescription>
+            Cuenta el dinero físico en tu caja real y registra el conteo para comparar con el balance físico esperado.
+          </DialogDescription>
         </DialogHeader>
 
         <p className="text-sm text-muted-foreground mb-2">
           Cuenta el dinero físico que tienes en tu caja real e ingresa las cantidades exactas de cada denominación.
-          El sistema comparará tu conteo con el balance teórico registrado.
+          El sistema comparará tu conteo con el balance físico esperado registrado en caja.
         </p>
 
         <div className="space-y-5">
@@ -122,8 +126,8 @@ export default function PhysicalCountModal({ open, onOpenChange }: PhysicalCount
                 <p className="text-lg font-bold text-foreground">{formatCurrency(physicalTotal)}</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Balance Teórico</p>
-                <p className="text-lg font-bold text-foreground">{formatCurrency(theoreticalTotal)}</p>
+                <p className="text-xs text-muted-foreground">Físico Esperado</p>
+                <p className="text-lg font-bold text-foreground">{formatCurrency(expectedPhysicalTotal)}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Diferencia</p>
@@ -135,7 +139,7 @@ export default function PhysicalCountModal({ open, onOpenChange }: PhysicalCount
 
             {hasDifference ? (
               <div className="flex items-start gap-2 p-3 bg-warning/10 border border-warning/30 rounded-md">
-                <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
+                <AlertTriangle className="size-4 text-warning mt-0.5 shrink-0" />
                 <div className="text-xs text-warning">
                   <p className="font-medium">Se detectó una diferencia de {formatCurrency(Math.abs(difference))}</p>
                   <p className="mt-1">
@@ -147,14 +151,14 @@ export default function PhysicalCountModal({ open, onOpenChange }: PhysicalCount
               </div>
             ) : physicalTotal > 0 ? (
               <div className="flex items-center gap-2 p-3 bg-success/10 border border-success/30 rounded-md">
-                <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
-                <p className="text-xs text-success font-medium">El conteo físico coincide con el balance teórico.</p>
+                <CheckCircle2 className="size-4 text-success shrink-0" />
+                <p className="text-xs text-success font-medium">El conteo físico coincide con el balance físico esperado.</p>
               </div>
             ) : null}
           </div>
 
           {/* Actions */}
-          <div className="flex justify-end space-x-3 pt-4 border-t border-border">
+          <div className="flex justify-end gap-x-3 pt-4 border-t border-border">
             <Button
               type="button"
               variant="outline"
@@ -172,12 +176,12 @@ export default function PhysicalCountModal({ open, onOpenChange }: PhysicalCount
                 "Guardando..."
               ) : hasDifference ? (
                 <>
-                  <AlertTriangle className="mr-2 h-4 w-4" />
+                  <AlertTriangle className="mr-2 size-4" />
                   Actualizar con Diferencia
                 </>
               ) : (
                 <>
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  <CheckCircle2 className="mr-2 size-4" />
                   Confirmar Conteo
                 </>
               )}

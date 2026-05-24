@@ -1,6 +1,45 @@
-node_modules
-dist
-.DS_Store
-server/public
+# ─── Dependencies ───────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ─── Build outputs ──────────────────────────────────────────
+dist/
+dist-electron/
+server/public/
+
+# ─── Electron distributable releases ────────────────────────
+release/
+
+# ─── Database files (sensitive runtime data) ────────────────
+*.db
+*.db-shm
+*.db-wal
+
+# ─── Logs and report files ──────────────────────────────────
+*.log
+eb-output.log
+react-doctor-report.txt
+react-doctor-report-2.txt
+report-utf8.txt
+parsed-report.json
+
+# ─── Release & distribution notes (generated) ───────────────
+github_release_v*.md
+user_release_v*.md
+release_notes.md
+
+# ─── Temp / scratch files ───────────────────────────────────
+configuracion.html
+test_storage.ts
+
+# ─── Vite internals ─────────────────────────────────────────
 vite.config.ts.*
 *.tar.gz
+
+# ─── OS files ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Lumina.png if it's a test asset (add back if intentional)
+# Lumina.png

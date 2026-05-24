@@ -23,11 +23,45 @@ export default function DenominationInput({
   disabled = false
 }: DenominationInputProps) {
   const [errors, setErrors] = useState<string[]>([]);
+  
+  // Local string buffers to allow fluent editing of 0, empty state and intermediate typing
+  const [localBills, setLocalBills] = useState<Record<string, string>>({});
+  const [localCoins, setLocalCoins] = useState<Record<string, string>>({});
 
   const total = calculateTotal(denominations);
 
+  // Sync external values to local states only when the parsed values change
+  useEffect(() => {
+    setLocalBills(prev => {
+      const next: Record<string, string> = { ...prev };
+      Object.entries(denominations.bills).forEach(([k, v]) => {
+        const parsedLocal = parseInt(prev[k] || "0") || 0;
+        if (parsedLocal !== v || prev[k] === undefined) {
+          next[k] = v === 0 ? "" : v.toString();
+        }
+      });
+      return next;
+    });
+
+    setLocalCoins(prev => {
+      const next: Record<string, string> = { ...prev };
+      Object.entries(denominations.coins).forEach(([k, v]) => {
+        const parsedLocal = parseInt(prev[k] || "0") || 0;
+        if (parsedLocal !== v || prev[k] === undefined) {
+          next[k] = v === 0 ? "" : v.toString();
+        }
+      });
+      return next;
+    });
+  }, [denominations]);
+
   const handleBillChange = (denomination: keyof Denomination['bills'], value: string) => {
-    const numValue = Math.max(0, parseInt(value) || 0);
+    // Only allow positive integers or empty string
+    if (value !== "" && !/^\d+$/.test(value)) return;
+    
+    setLocalBills(prev => ({ ...prev, [denomination]: value }));
+    const numValue = value === "" ? 0 : parseInt(value) || 0;
+    
     onChange({
       ...denominations,
       bills: {
@@ -38,7 +72,11 @@ export default function DenominationInput({
   };
 
   const handleCoinChange = (denomination: keyof Denomination['coins'], value: string) => {
-    const numValue = Math.max(0, parseInt(value) || 0);
+    if (value !== "" && !/^\d+$/.test(value)) return;
+    
+    setLocalCoins(prev => ({ ...prev, [denomination]: value }));
+    const numValue = value === "" ? 0 : parseInt(value) || 0;
+    
     onChange({
       ...denominations,
       coins: {
@@ -79,11 +117,11 @@ export default function DenominationInput({
     <div className="space-y-4">
       {errors.length > 0 && (
         <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
+          <AlertTriangle className="size-4" />
           <AlertDescription>
             <ul className="list-disc list-inside space-y-1">
-              {errors.map((error, index) => (
-                <li key={index}>{error}</li>
+              {errors.map((error) => (
+                <li key={error}>{error}</li>
               ))}
             </ul>
           </AlertDescription>
@@ -98,14 +136,16 @@ export default function DenominationInput({
             const currentValue = denominations.bills[denomination as keyof typeof denominations.bills];
             const availableValue = availableDenominations?.bills[denomination as keyof typeof availableDenominations.bills];
             const hasError = availableDenominations && currentValue > (availableValue ?? 0);
+            const inputValue = localBills[denomination] ?? "";
 
             return (
-              <div key={denomination} className="flex items-center space-x-2">
+              <div key={denomination} className="flex items-center gap-x-2">
                 <Label className="text-sm text-foreground w-12">${value}</Label>
                 <Input
-                  type="number"
-                  min="0"
-                  value={currentValue || ""}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={inputValue}
                   onChange={(e) => handleBillChange(denomination as keyof typeof denominations.bills, e.target.value)}
                   placeholder="0"
                   disabled={disabled}
@@ -131,14 +171,16 @@ export default function DenominationInput({
             const currentValue = denominations.coins[denomination as keyof typeof denominations.coins];
             const availableValue = availableDenominations?.coins[denomination as keyof typeof availableDenominations.coins];
             const hasError = availableDenominations && currentValue > (availableValue ?? 0);
+            const inputValue = localCoins[denomination] ?? "";
 
             return (
-              <div key={denomination} className="flex items-center space-x-2">
+              <div key={denomination} className="flex items-center gap-x-2">
                 <Label className="text-sm text-foreground w-12">${value}</Label>
                 <Input
-                  type="number"
-                  min="0"
-                  value={currentValue || ""}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={inputValue}
                   onChange={(e) => handleCoinChange(denomination as keyof typeof denominations.coins, e.target.value)}
                   placeholder="0"
                   disabled={disabled}
@@ -157,7 +199,7 @@ export default function DenominationInput({
       </div>
 
       {/* Total calculation */}
-      {showTotal && (
+      {Boolean(showTotal) && (
         <Card className="bg-muted/30">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">

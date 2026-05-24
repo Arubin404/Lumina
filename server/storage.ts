@@ -3,6 +3,7 @@ import {
   type InsertUser, 
   type Income, 
   type InsertIncome,
+  type UpdateIncome,
   type Exit,
   type InsertExit,
   type Invoice,
@@ -11,17 +12,19 @@ import {
   type CashBox,
   type CashExchange,
   type InsertCashExchange,
+  type CashAdjustment,
   type Configuration,
   type UpdateConfig,
   type CompleteExit,
   type AddToExit,
-  type Denomination
+  type Denomination,
+  type UpdateExit
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql, and, gte, lt } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
-export interface IStorage {
+interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
@@ -31,32 +34,40 @@ export interface IStorage {
   
   getIncomes(): Promise<Income[]>;
   createIncome(income: InsertIncome): Promise<Income>;
-  updateIncome(id: string, income: InsertIncome): Promise<Income>;
+  updateIncome(id: string, income: UpdateIncome): Promise<Income>;
   deleteIncome(id: string): Promise<void>;
   
   getExits(): Promise<Exit[]>;
   getPendingExits(): Promise<Exit[]>;
   getCompletedExits(): Promise<Exit[]>;
   createExit(exit: InsertExit): Promise<Exit>;
-  updateExit(id: string, exit: InsertExit): Promise<Exit>;
+  updateExit(id: string, exit: UpdateExit): Promise<Exit>;
   completeExit(completion: CompleteExit): Promise<Exit>;
   addToExit(data: AddToExit): Promise<Exit>;
   deleteExit(id: string): Promise<void>;
   
   getInvoicesByExitId(exitId: string): Promise<Invoice[]>;
-  getChangeByExitId(exitId: string): Promise<ChangeRecord | undefined>;
+  getChangeByExitId(exitId: string): Promise<ChangeRecord[]>;
   
   getCashExchanges(): Promise<CashExchange[]>;
   createCashExchange(exchange: InsertCashExchange): Promise<CashExchange>;
   
+  getCashAdjustments(): Promise<CashAdjustment[]>;
+  
   getConfiguration(): Promise<Configuration>;
   updateConfiguration(config: UpdateConfig): Promise<Configuration>;
   getNextVoucherNumber(): Promise<number>;
+  syncNextVoucherNumber(): Promise<number>;
   
-  getMovementsByMonth(year: number, month: number): Promise<any[]>;
+  getMovementsByMonth(year: number, month: number): Promise<{ movements: any[]; previousBalance: number; }>;
+
+  getAuditLogs(entityId: string): Promise<schema.AuditLog[]>;
+  getClosedPeriods(): Promise<schema.ClosedPeriod[]>;
+  closePeriod(year: number, month: number): Promise<schema.ClosedPeriod>;
+  isPeriodClosed(date: Date): Promise<boolean>;
 }
 
-export class SqliteStorage implements IStorage {
+class SqliteStorage implements IStorage {
   constructor() {
     this.initializeDefaults().catch(console.error);
   }
@@ -66,8 +77,8 @@ export class SqliteStorage implements IStorage {
     if (!box || box.length === 0) {
       await db.insert(schema.cashBox).values({
         denominations: {
-          bills: { hundred: 0, fifty: 0, twenty: 0, ten: 0, five: 0, two: 0, one: 0 },
-          coins: { five: 0, two: 0, one: 0, fifty_cents: 0, quarter: 0, dime: 0 }
+          bills: { hundred: 0, fifty: 0, twenty: 0, ten: 0, five: 0, one: 0 },
+          coins: { one: 0, fifty_cents: 0, quarter: 0, dime: 0, nickel: 0, penny: 0 }
         },
         totalAmount: 0,
         lastUpdated: new Date()
@@ -84,170 +95,97 @@ export class SqliteStorage implements IStorage {
   }
 
   // ─── HELPERS ─────────────────────────────────────────────
-
+  
   private calculateTotal(denominations: Denomination): number {
     const { bills, coins } = denominations;
+    // Values in cents to ensure absolute integer precision
     return (
-      bills.hundred * 100 + bills.fifty * 50 + bills.twenty * 20 + bills.ten * 10 +
-      bills.five * 5 + bills.two * 2 + bills.one * 1 +
-      coins.five * 5 + coins.two * 2 + coins.one * 1 +
-      coins.fifty_cents * 0.5 + coins.quarter * 0.25 + coins.dime * 0.1
+      (bills.hundred || 0) * 10000 + (bills.fifty || 0) * 5000 + (bills.twenty || 0) * 2000 + 
+      (bills.ten || 0) * 1000 + (bills.five || 0) * 500 + (bills.one || 0) * 100 +
+      (coins.one || 0) * 100 + (coins.fifty_cents || 0) * 50 + (coins.quarter || 0) * 25 +
+      (coins.dime || 0) * 10 + (coins.nickel || 0) * 5 + (coins.penny || 0) * 1
     );
   }
 
-  /** Subtract denominations with smart rebalancing.
-   *  If specific bills aren't available, breaks larger bills to cover the gap.
-   *  Only fails if the TOTAL amount in the box is insufficient. */
-  private smartSubtract(current: Denomination, toSubtract: Denomination): Denomination {
+  /** Strict subtraction: fails if any specific denomination count becomes negative.
+   *  Reflects the physical reality of the cash box. */
+  private strictSubtract(current: Denomination, toSubtract: Denomination): Denomination {
     const result: Denomination = {
       bills: {
-        hundred: current.bills.hundred - toSubtract.bills.hundred,
-        fifty:   current.bills.fifty   - toSubtract.bills.fifty,
-        twenty:  current.bills.twenty  - toSubtract.bills.twenty,
-        ten:     current.bills.ten     - toSubtract.bills.ten,
-        five:    current.bills.five    - toSubtract.bills.five,
-        two:     current.bills.two     - toSubtract.bills.two,
-        one:     current.bills.one     - toSubtract.bills.one
+        hundred: (current.bills.hundred || 0) - (toSubtract.bills.hundred || 0),
+        fifty:   (current.bills.fifty || 0)   - (toSubtract.bills.fifty || 0),
+        twenty:  (current.bills.twenty || 0)  - (toSubtract.bills.twenty || 0),
+        ten:     (current.bills.ten || 0)     - (toSubtract.bills.ten || 0),
+        five:    (current.bills.five || 0)    - (toSubtract.bills.five || 0),
+        one:     (current.bills.one || 0)     - (toSubtract.bills.one || 0)
       },
       coins: {
-        five:        current.coins.five        - toSubtract.coins.five,
-        two:         current.coins.two         - toSubtract.coins.two,
-        one:         current.coins.one         - toSubtract.coins.one,
-        fifty_cents: current.coins.fifty_cents - toSubtract.coins.fifty_cents,
-        quarter:     current.coins.quarter     - toSubtract.coins.quarter,
-        dime:        current.coins.dime        - toSubtract.coins.dime
+        one:         (current.coins.one || 0)         - (toSubtract.coins.one || 0),
+        fifty_cents: (current.coins.fifty_cents || 0) - (toSubtract.coins.fifty_cents || 0),
+        quarter:     (current.coins.quarter || 0)     - (toSubtract.coins.quarter || 0),
+        dime:        (current.coins.dime || 0)        - (toSubtract.coins.dime || 0),
+        nickel:      (current.coins.nickel || 0)      - (toSubtract.coins.nickel || 0),
+        penny:       (current.coins.penny || 0)       - (toSubtract.coins.penny || 0)
       }
     };
 
-    // If total would be negative, it's truly impossible
-    const resultTotal = this.calculateTotal(result);
-    if (resultTotal < -0.01) {
-      throw new Error(
-        `Fondos insuficientes: la caja tiene ${this.calculateTotal(current).toFixed(2)} ` +
-        `pero se necesitan ${this.calculateTotal(toSubtract).toFixed(2)}`
-      );
+    const BILL_LABELS: Record<string, string> = {
+      hundred: "100", fifty: "50", twenty: "20", ten: "10", five: "5", one: "1"
+    };
+    const COIN_LABELS: Record<string, string> = {
+      one: "1", fifty_cents: "0.50", quarter: "0.25", dime: "0.10", nickel: "0.05", penny: "0.01"
+    };
+
+    // Check for negative counts in bills
+    for (const [key, count] of Object.entries(result.bills)) {
+      if (count < 0) {
+        throw new Error(`Fondos insuficientes: no hay suficientes billetes de $${BILL_LABELS[key]} en la caja.`);
+      }
     }
-
-    // Rebalance: resolve negative counts by breaking larger bills
-    // Order: hundred(100), fifty(50), twenty(20), ten(10), five_b(5), two_b(2), one_b(1),
-    //        five_c(5), two_c(2), one_c(1), fifty_cents(0.5), quarter(0.25), dime(0.1)
-    type DenomEntry = { group: 'bills' | 'coins'; key: string; value: number };
-    const denomOrder: DenomEntry[] = [
-      { group: 'bills', key: 'hundred', value: 100 },
-      { group: 'bills', key: 'fifty', value: 50 },
-      { group: 'bills', key: 'twenty', value: 20 },
-      { group: 'bills', key: 'ten', value: 10 },
-      { group: 'bills', key: 'five', value: 5 },
-      { group: 'bills', key: 'two', value: 2 },
-      { group: 'bills', key: 'one', value: 1 },
-      { group: 'coins', key: 'five', value: 5 },
-      { group: 'coins', key: 'two', value: 2 },
-      { group: 'coins', key: 'one', value: 1 },
-      { group: 'coins', key: 'fifty_cents', value: 0.5 },
-      { group: 'coins', key: 'quarter', value: 0.25 },
-      { group: 'coins', key: 'dime', value: 0.1 },
-    ];
-
-    const getCount = (d: Denomination, entry: DenomEntry): number => {
-      return (d[entry.group] as any)[entry.key] as number;
-    };
-    const setCount = (d: Denomination, entry: DenomEntry, val: number) => {
-      (d[entry.group] as any)[entry.key] = val;
-    };
-
-    // Multiple passes to resolve debts by breaking larger denominations
-    for (let pass = 0; pass < 3; pass++) {
-      for (let i = denomOrder.length - 1; i >= 0; i--) {
-        const entry = denomOrder[i];
-        const count = getCount(result, entry);
-        if (count >= 0) continue;
-
-        const debtAmount = Math.abs(count) * entry.value;
-        setCount(result, entry, 0);
-
-        // Find a larger denomination to break
-        let resolved = false;
-        for (let j = 0; j < i; j++) {
-          const donor = denomOrder[j];
-          const donorCount = getCount(result, donor);
-          if (donorCount <= 0) continue;
-
-          // How many donors needed to cover the debt
-          const donorsNeeded = Math.ceil(debtAmount / donor.value);
-          const donorsUsed = Math.min(donorsNeeded, donorCount);
-          const donorValue = donorsUsed * donor.value;
-
-          setCount(result, donor, donorCount - donorsUsed);
-
-          // Return change as the next smaller denomination available
-          let remainder = donorValue - debtAmount;
-          if (remainder > 0.001) {
-            // Distribute remainder starting from largest fitting denomination
-            for (let k = 0; k < denomOrder.length; k++) {
-              const changeDenom = denomOrder[k];
-              if (changeDenom.value > remainder + 0.001) continue;
-              const changeCount = Math.floor(remainder / changeDenom.value + 0.001);
-              if (changeCount > 0) {
-                setCount(result, changeDenom, getCount(result, changeDenom) + changeCount);
-                remainder -= changeCount * changeDenom.value;
-              }
-            }
-          }
-          resolved = true;
-          break;
-        }
-
-        if (!resolved) {
-          // Try combining smaller denominations
-          let collected = 0;
-          for (let j = i + 1; j < denomOrder.length; j++) {
-            const src = denomOrder[j];
-            const srcCount = getCount(result, src);
-            if (srcCount <= 0) continue;
-            const needed = Math.ceil((debtAmount - collected) / src.value);
-            const used = Math.min(needed, srcCount);
-            collected += used * src.value;
-            setCount(result, src, srcCount - used);
-            if (collected >= debtAmount - 0.001) break;
-          }
-          // Any leftover goes back
-          let leftover = collected - debtAmount;
-          if (leftover > 0.001) {
-            for (let k = 0; k < denomOrder.length; k++) {
-              const changeDenom = denomOrder[k];
-              if (changeDenom.value > leftover + 0.001) continue;
-              const changeCount = Math.floor(leftover / changeDenom.value + 0.001);
-              if (changeCount > 0) {
-                setCount(result, changeDenom, getCount(result, changeDenom) + changeCount);
-                leftover -= changeCount * changeDenom.value;
-              }
-            }
-          }
-        }
+    // Check for negative counts in coins
+    for (const [key, count] of Object.entries(result.coins)) {
+      if (count < 0) {
+        throw new Error(`Fondos insuficientes: no hay suficientes monedas de $${COIN_LABELS[key]} en la caja.`);
       }
     }
 
     return result;
   }
 
+  private allocateNextVoucherNumber(tx: any): number {
+    const [config] = tx.select().from(schema.configuration).limit(1).all();
+    if (!config) throw new Error("Configuración no inicializada");
+
+    // Always use global sequence to avoid collisions with unique constraints
+    const voucher = config.nextVoucherNumber;
+    tx.update(schema.configuration)
+      .set({
+        nextVoucherNumber: config.nextVoucherNumber + 1,
+        lastUpdated: new Date()
+      })
+      .where(eq(schema.configuration.id, config.id))
+      .run();
+
+    return voucher;
+  }
+
   private addDenominations(a: Denomination, b: Denomination): Denomination {
     return {
       bills: {
-        hundred: a.bills.hundred + b.bills.hundred,
-        fifty:   a.bills.fifty   + b.bills.fifty,
-        twenty:  a.bills.twenty  + b.bills.twenty,
-        ten:     a.bills.ten     + b.bills.ten,
-        five:    a.bills.five    + b.bills.five,
-        two:     a.bills.two     + b.bills.two,
-        one:     a.bills.one     + b.bills.one
+        hundred: (a.bills.hundred || 0) + (b.bills.hundred || 0),
+        fifty:   (a.bills.fifty || 0)   + (b.bills.fifty || 0),
+        twenty:  (a.bills.twenty || 0)  + (b.bills.twenty || 0),
+        ten:     (a.bills.ten || 0)     + (b.bills.ten || 0),
+        five:    (a.bills.five || 0)    + (b.bills.five || 0),
+        one:     (a.bills.one || 0)     + (b.bills.one || 0)
       },
       coins: {
-        five:        a.coins.five        + b.coins.five,
-        two:         a.coins.two         + b.coins.two,
-        one:         a.coins.one         + b.coins.one,
-        fifty_cents: a.coins.fifty_cents + b.coins.fifty_cents,
-        quarter:     a.coins.quarter     + b.coins.quarter,
-        dime:        a.coins.dime        + b.coins.dime
+        one:         (a.coins.one || 0)         + (b.coins.one || 0),
+        fifty_cents: (a.coins.fifty_cents || 0) + (b.coins.fifty_cents || 0),
+        quarter:     (a.coins.quarter || 0)     + (b.coins.quarter || 0),
+        dime:        (a.coins.dime || 0)        + (b.coins.dime || 0),
+        nickel:      (a.coins.nickel || 0)      + (b.coins.nickel || 0),
+        penny:       (a.coins.penny || 0)       + (b.coins.penny || 0)
       }
     };
   }
@@ -279,6 +217,22 @@ export class SqliteStorage implements IStorage {
   async updateCashBox(denominations: Denomination): Promise<CashBox> {
     const totalAmount = this.calculateTotal(denominations);
     const box = await this.getCashBox();
+    
+    // Only create an adjustment record if denominations actually changed
+    const previousTotal = box.totalAmount;
+    const denomsChanged = JSON.stringify(box.denominations) !== JSON.stringify(denominations);
+    
+    if (denomsChanged) {
+      const difference = totalAmount - previousTotal;
+      await db.insert(schema.cashAdjustments).values({
+        previousDenominations: box.denominations,
+        newDenominations: denominations,
+        previousTotal,
+        newTotal: totalAmount,
+        difference
+      });
+    }
+    
     const [updated] = await db.update(schema.cashBox)
       .set({ denominations, totalAmount, lastUpdated: new Date() })
       .where(eq(schema.cashBox.id, box.id))
@@ -293,70 +247,100 @@ export class SqliteStorage implements IStorage {
   }
 
   async createIncome(income: InsertIncome): Promise<Income> {
-    const voucherId = await this.getNextVoucherNumber();
-    const totalAmount = this.calculateTotal(income.denominations);
+    return db.transaction((tx) => {
+      const voucherId = this.allocateNextVoucherNumber(tx);
+      const totalAmount = this.calculateTotal(income.denominations);
 
-    const [newIncome] = await db.insert(schema.incomes).values({
-      ...income,
-      voucherId,
-      totalAmount,
-    }).returning();
+      const [newIncome] = tx.insert(schema.incomes).values({
+        ...income,
+        voucherId,
+        totalAmount,
+      }).returning().all();
 
-    // Add to physical cash box
-    const box = await this.getCashBox();
-    const updatedDenom = this.addDenominations(box.denominations, income.denominations);
-    await db.update(schema.cashBox)
-      .set({ denominations: updatedDenom, totalAmount: this.calculateTotal(updatedDenom), lastUpdated: new Date() })
-      .where(eq(schema.cashBox.id, box.id));
+      const [box] = tx.select().from(schema.cashBox).limit(1).all();
+      const updatedDenom = this.addDenominations(box.denominations, income.denominations);
+      tx.update(schema.cashBox)
+        .set({ denominations: updatedDenom, totalAmount: this.calculateTotal(updatedDenom), lastUpdated: new Date() })
+        .where(eq(schema.cashBox.id, box.id))
+        .run();
 
-    return newIncome;
+      return newIncome;
+    });
   }
 
-  async updateIncome(id: string, newIncomeData: InsertIncome): Promise<Income> {
-    const [oldIncome] = await db.select().from(schema.incomes).where(eq(schema.incomes.id, id));
-    if (!oldIncome) throw new Error("Ingreso no encontrado");
+  async updateIncome(id: string, newIncomeData: UpdateIncome): Promise<Income> {
+    return db.transaction((tx) => {
+      const [oldIncome] = tx.select().from(schema.incomes).where(eq(schema.incomes.id, id)).all();
+      if (!oldIncome) throw new Error("Ingreso no encontrado");
+      
+      const [config] = tx.select().from(schema.configuration).limit(1).all();
+      if (config.lockClosedPeriods) {
+        const dOld = new Date(oldIncome.date);
+        const closedOld = tx.select().from(schema.closedPeriods).where(and(eq(schema.closedPeriods.year, dOld.getFullYear()), eq(schema.closedPeriods.month, dOld.getMonth() + 1))).all();
+        if (closedOld.length > 0) throw new Error("No se puede editar un registro de un mes que ya ha sido cerrado contablemente.");
+        
+        const dNew = new Date(newIncomeData.date);
+        const closedNew = tx.select().from(schema.closedPeriods).where(and(eq(schema.closedPeriods.year, dNew.getFullYear()), eq(schema.closedPeriods.month, dNew.getMonth() + 1))).all();
+        if (closedNew.length > 0) throw new Error("No se puede mover el registro a un mes que ya ha sido cerrado contablemente.");
+      }
 
-    const totalAmount = this.calculateTotal(newIncomeData.denominations);
+      const totalAmount = this.calculateTotal(newIncomeData.denominations);
+      if (JSON.stringify(oldIncome.denominations) !== JSON.stringify(newIncomeData.denominations)) {
+        const [box] = tx.select().from(schema.cashBox).limit(1).all();
+        const afterRemoval = this.strictSubtract(box.denominations, oldIncome.denominations);
+        const afterAddition = this.addDenominations(afterRemoval, newIncomeData.denominations);
+        tx.update(schema.cashBox)
+          .set({ denominations: afterAddition, totalAmount: this.calculateTotal(afterAddition), lastUpdated: new Date() })
+          .where(eq(schema.cashBox.id, box.id))
+          .run();
+      }
 
-    // Bypass physical box update if denominations didn't change (e.g. just updating textual details)
-    if (JSON.stringify(oldIncome.denominations) !== JSON.stringify(newIncomeData.denominations)) {
-      const box = await this.getCashBox();
-      // Smart subtract the old denominations, then add the new ones
-      const afterRemoval = this.smartSubtract(box.denominations, oldIncome.denominations);
-      const afterAddition = this.addDenominations(afterRemoval, newIncomeData.denominations);
+      const [updatedIncome] = tx.update(schema.incomes)
+        .set({
+          detail: newIncomeData.detail,
+          date: newIncomeData.date,
+          denominations: newIncomeData.denominations,
+          totalAmount,
+          ...(newIncomeData.voucherId !== undefined ? { voucherId: newIncomeData.voucherId } : {}),
+          editedAt: new Date()
+        })
+        .where(eq(schema.incomes.id, id))
+        .returning().all();
 
-      await db.update(schema.cashBox)
-        .set({ denominations: afterAddition, totalAmount: this.calculateTotal(afterAddition), lastUpdated: new Date() })
-        .where(eq(schema.cashBox.id, box.id));
-    }
+      if (config.editHistory) {
+        tx.insert(schema.auditLogs).values({
+          entityId: id,
+          entityType: 'income',
+          action: 'edit',
+          previousData: JSON.stringify(oldIncome),
+          newData: JSON.stringify(updatedIncome)
+        }).run();
+      }
 
-    const [updatedIncome] = await db.update(schema.incomes)
-      .set({
-        detail: newIncomeData.detail,
-        date: newIncomeData.date,
-        denominations: newIncomeData.denominations,
-        totalAmount,
-        editedAt: new Date()
-      })
-      .where(eq(schema.incomes.id, id))
-      .returning();
-
-    return updatedIncome;
+      return updatedIncome;
+    });
   }
 
   async deleteIncome(id: string): Promise<void> {
-    const [income] = await db.select().from(schema.incomes).where(eq(schema.incomes.id, id));
-    if (!income) throw new Error("Ingreso no encontrado");
+    return db.transaction((tx) => {
+      const [income] = tx.select().from(schema.incomes).where(eq(schema.incomes.id, id)).all();
+      if (!income) throw new Error("Ingreso no encontrado");
 
-    const box = await this.getCashBox();
-    // Smart subtract: will rebalance denominations if exact bills aren't available
-    const newDenom = this.smartSubtract(box.denominations, income.denominations);
+      const [config] = tx.select().from(schema.configuration).limit(1).all();
+      if (config.lockClosedPeriods) {
+        const d = new Date(income.date);
+        const closed = tx.select().from(schema.closedPeriods).where(and(eq(schema.closedPeriods.year, d.getFullYear()), eq(schema.closedPeriods.month, d.getMonth() + 1))).all();
+        if (closed.length > 0) throw new Error("No se puede eliminar un registro de un mes que ya ha sido cerrado contablemente.");
+      }
 
-    await db.update(schema.cashBox)
-      .set({ denominations: newDenom, totalAmount: this.calculateTotal(newDenom), lastUpdated: new Date() })
-      .where(eq(schema.cashBox.id, box.id));
-
-    await db.delete(schema.incomes).where(eq(schema.incomes.id, id));
+      const [box] = tx.select().from(schema.cashBox).limit(1).all();
+      const newDenom = this.strictSubtract(box.denominations, income.denominations);
+      tx.update(schema.cashBox)
+        .set({ denominations: newDenom, totalAmount: this.calculateTotal(newDenom), lastUpdated: new Date() })
+        .where(eq(schema.cashBox.id, box.id))
+        .run();
+      tx.delete(schema.incomes).where(eq(schema.incomes.id, id)).run();
+    });
   }
 
   // ─── EXITS ───────────────────────────────────────────────
@@ -378,222 +362,339 @@ export class SqliteStorage implements IStorage {
   }
 
   async createExit(exit: InsertExit): Promise<Exit> {
-    const totalAmount = this.calculateTotal(exit.denominationsGiven);
-
-    const box = await this.getCashBox();
-    // Smart subtract: will rebalance if specific bills aren't available
-    const updatedDenom = this.smartSubtract(box.denominations, exit.denominationsGiven);
-
-    const [newExit] = await db.insert(schema.exits).values({
-      ...exit,
-      initialAmount: totalAmount,
-      isPending: true,
-      renderedAmount: 0,
-      changeAmount: 0,
-    }).returning();
-
-    await db.update(schema.cashBox)
-      .set({ denominations: updatedDenom, totalAmount: this.calculateTotal(updatedDenom), lastUpdated: new Date() })
-      .where(eq(schema.cashBox.id, box.id));
-
-    return newExit;
+    return db.transaction((tx) => {
+      const totalAmount = this.calculateTotal(exit.denominationsGiven);
+      const [box] = tx.select().from(schema.cashBox).limit(1).all();
+      const updatedDenom = this.strictSubtract(box.denominations, exit.denominationsGiven);
+      const [newExit] = tx.insert(schema.exits).values({
+        ...exit,
+        initialAmount: totalAmount,
+        isPending: true,
+        renderedAmount: 0,
+        changeAmount: 0,
+      }).returning().all();
+      tx.update(schema.cashBox)
+        .set({ denominations: updatedDenom, totalAmount: this.calculateTotal(updatedDenom), lastUpdated: new Date() })
+        .where(eq(schema.cashBox.id, box.id))
+        .run();
+      return newExit;
+    });
   }
 
-  async updateExit(id: string, newExitData: InsertExit): Promise<Exit> {
-    const [oldExit] = await db.select().from(schema.exits).where(eq(schema.exits.id, id));
-    if (!oldExit) throw new Error("Salida no encontrada");
-
-    if (!oldExit.isPending &&
-       JSON.stringify(oldExit.denominationsGiven) !== JSON.stringify(newExitData.denominationsGiven)) {
-       throw new Error("No se pueden modificar las denominaciones de una salida completada.");
-    }
-
-    if (oldExit.isPending) {
-      if (JSON.stringify(oldExit.denominationsGiven) !== JSON.stringify(newExitData.denominationsGiven)) {
-        const box = await this.getCashBox();
-        // Return old denominations, then take new ones
-        const afterReturn = this.addDenominations(box.denominations, oldExit.denominationsGiven);
-        const afterNewTake = this.smartSubtract(afterReturn, newExitData.denominationsGiven);
-
-        await db.update(schema.cashBox)
-          .set({ denominations: afterNewTake, totalAmount: this.calculateTotal(afterNewTake), lastUpdated: new Date() })
-          .where(eq(schema.cashBox.id, box.id));
+  async updateExit(id: string, newExitData: UpdateExit): Promise<Exit> {
+    return db.transaction((tx) => {
+      const [oldExit] = tx.select().from(schema.exits).where(eq(schema.exits.id, id)).all();
+      if (!oldExit) throw new Error("Salida no encontrada");
+      
+      const [config] = tx.select().from(schema.configuration).limit(1).all();
+      if (config.lockClosedPeriods) {
+        const dOld = new Date(oldExit.date);
+        const closedOld = tx.select().from(schema.closedPeriods).where(and(eq(schema.closedPeriods.year, dOld.getFullYear()), eq(schema.closedPeriods.month, dOld.getMonth() + 1))).all();
+        if (closedOld.length > 0) throw new Error("No se puede editar un registro de un mes que ya ha sido cerrado contablemente.");
+        
+        const dNew = new Date(newExitData.date);
+        const closedNew = tx.select().from(schema.closedPeriods).where(and(eq(schema.closedPeriods.year, dNew.getFullYear()), eq(schema.closedPeriods.month, dNew.getMonth() + 1))).all();
+        if (closedNew.length > 0) throw new Error("No se puede mover el registro a un mes que ya ha sido cerrado contablemente.");
       }
-    }
 
-    const totalAmount = this.calculateTotal(newExitData.denominationsGiven);
-    const [updatedExit] = await db.update(schema.exits)
-      .set({
-        purpose: newExitData.purpose,
-        date: newExitData.date,
-        denominationsGiven: newExitData.denominationsGiven,
-        initialAmount: totalAmount,
-        editedAt: new Date()
-      })
-      .where(eq(schema.exits.id, id))
-      .returning();
+      const isEditingDetailsOnly = (newExitData.invoices === undefined && newExitData.changeGiven === undefined);
 
-    return updatedExit;
+      // Handle Cashbox Adjustments
+      if (isEditingDetailsOnly) {
+        // Only denominationsGiven changed (standard details update)
+        if (JSON.stringify(oldExit.denominationsGiven) !== JSON.stringify(newExitData.denominationsGiven)) {
+          const [box] = tx.select().from(schema.cashBox).limit(1).all();
+          const afterReturn = this.addDenominations(box.denominations, oldExit.denominationsGiven);
+          const afterNewTake = this.strictSubtract(afterReturn, newExitData.denominationsGiven);
+          tx.update(schema.cashBox)
+            .set({ denominations: afterNewTake, totalAmount: this.calculateTotal(afterNewTake), lastUpdated: new Date() })
+            .where(eq(schema.cashBox.id, box.id))
+            .run();
+        }
+      } else {
+        // Complete/Partial update: we revert old denominationsGiven AND all associated changeRecords from the cashbox,
+        // then apply the new denominationsGiven and the new change record
+        const [box] = tx.select().from(schema.cashBox).limit(1).all();
+        let currentDenom = this.addDenominations(box.denominations, oldExit.denominationsGiven);
+
+        const oldChangeRecords = tx.select().from(schema.changeRecords).where(eq(schema.changeRecords.exitId, id)).all();
+        for (const cr of oldChangeRecords) {
+          currentDenom = this.strictSubtract(currentDenom, cr.denominations);
+        }
+
+        // Apply new denominationsGiven and new change record
+        currentDenom = this.strictSubtract(currentDenom, newExitData.denominationsGiven);
+        if (newExitData.changeGiven) {
+          currentDenom = this.addDenominations(currentDenom, newExitData.changeGiven);
+        }
+
+        tx.update(schema.cashBox)
+          .set({ denominations: currentDenom, totalAmount: this.calculateTotal(currentDenom), lastUpdated: new Date() })
+          .where(eq(schema.cashBox.id, box.id))
+          .run();
+      }
+
+      // Handle Invoice adjustments (if not editing details only)
+      let updatedInvoicesAmount = 0;
+      if (!isEditingDetailsOnly && newExitData.invoices) {
+        const newInvoiceIds = new Set(newExitData.invoices.map(inv => inv.id).filter(Boolean) as string[]);
+        
+        // Delete invoices not present in the new list
+        if (newInvoiceIds.size === 0) {
+          tx.delete(schema.invoices).where(eq(schema.invoices.exitId, id)).run();
+        } else {
+          const oldInvoices = tx.select().from(schema.invoices).where(eq(schema.invoices.exitId, id)).all();
+          for (const oldInv of oldInvoices) {
+            if (!newInvoiceIds.has(oldInv.id)) {
+              tx.delete(schema.invoices).where(eq(schema.invoices.id, oldInv.id)).run();
+            }
+          }
+        }
+
+        // Create or update invoices
+        for (const inv of newExitData.invoices) {
+          if (inv.id) {
+            tx.update(schema.invoices)
+              .set({
+                detail: inv.detail,
+                amount: inv.amount,
+                date: inv.date,
+                ...(inv.voucherId !== undefined ? { voucherId: inv.voucherId } : {})
+              })
+              .where(eq(schema.invoices.id, inv.id))
+              .run();
+            updatedInvoicesAmount += inv.amount;
+          } else {
+            const voucherId = this.allocateNextVoucherNumber(tx);
+            tx.insert(schema.invoices)
+              .values({
+                exitId: id,
+                voucherId,
+                detail: inv.detail,
+                amount: inv.amount,
+                date: inv.date
+              })
+              .run();
+            updatedInvoicesAmount += inv.amount;
+          }
+        }
+      }
+
+      // Handle Change Record adjustments (if not editing details only)
+      let newChangeAmount = oldExit.changeAmount;
+      if (!isEditingDetailsOnly) {
+        // Delete all old change records and insert a consolidated one
+        tx.delete(schema.changeRecords).where(eq(schema.changeRecords.exitId, id)).run();
+        
+        if (newExitData.changeGiven) {
+          const changeAmt = this.calculateTotal(newExitData.changeGiven);
+          newChangeAmount = changeAmt;
+          if (changeAmt > 0) {
+            tx.insert(schema.changeRecords).values({
+              exitId: id,
+              denominations: newExitData.changeGiven,
+              totalAmount: changeAmt
+            }).run();
+          }
+        } else {
+          newChangeAmount = 0;
+        }
+      }
+
+      const totalAmount = this.calculateTotal(newExitData.denominationsGiven);
+      
+      // Calculate isPending, renderedAmount, changeAmount
+      let isPending = oldExit.isPending;
+      let renderedAmount = oldExit.renderedAmount;
+      let completedAt = oldExit.completedAt;
+
+      if (!isEditingDetailsOnly) {
+        renderedAmount = updatedInvoicesAmount;
+        const totalAccountedFor = renderedAmount + newChangeAmount;
+        
+        if (totalAccountedFor > totalAmount) {
+          throw new Error(`El monto total rendido ($${(totalAccountedFor/100).toFixed(2)}) superaría el monto inicial de la salida ($${(totalAmount/100).toFixed(2)}).`);
+        }
+        
+        const isFullyRendered = totalAccountedFor === totalAmount;
+        isPending = !isFullyRendered;
+        completedAt = isFullyRendered ? (oldExit.completedAt || new Date()) : null;
+      }
+
+      const [updatedExit] = tx.update(schema.exits)
+        .set({
+          purpose: newExitData.purpose,
+          date: newExitData.date,
+          denominationsGiven: newExitData.denominationsGiven,
+          initialAmount: totalAmount,
+          isPending,
+          renderedAmount,
+          changeAmount: newChangeAmount,
+          completedAt,
+          editedAt: new Date()
+        })
+        .where(eq(schema.exits.id, id))
+        .returning().all();
+
+      if (config.editHistory) {
+        tx.insert(schema.auditLogs).values({
+          entityId: id,
+          entityType: 'exit',
+          action: 'edit',
+          previousData: JSON.stringify(oldExit),
+          newData: JSON.stringify(updatedExit)
+        }).run();
+      }
+
+      return updatedExit;
+    });
   }
 
   async deleteExit(id: string): Promise<void> {
-    const [exit] = await db.select().from(schema.exits).where(eq(schema.exits.id, id));
-    if (!exit) throw new Error("Salida no encontrada");
+    return db.transaction((tx) => {
+      const [exit] = tx.select().from(schema.exits).where(eq(schema.exits.id, id)).all();
+      if (!exit) throw new Error("Salida no encontrada");
 
-    const box = await this.getCashBox();
-    let newDenom: Denomination;
-
-    if (exit.isPending) {
-      // Return the money to the box
-      newDenom = this.addDenominations(box.denominations, exit.denominationsGiven);
-    } else {
-      // Completed exit: return given - change(s)
-      const changeRecords = await db.select().from(schema.changeRecords).where(eq(schema.changeRecords.exitId, id));
-      
-      let currentDenom = this.addDenominations(box.denominations, exit.denominationsGiven);
-      if (changeRecords.length > 0) {
-        for (const change of changeRecords) {
-          currentDenom = this.smartSubtract(currentDenom, change.denominations);
-        }
-        await db.delete(schema.changeRecords).where(eq(schema.changeRecords.exitId, id));
+      const [config] = tx.select().from(schema.configuration).limit(1).all();
+      if (config.lockClosedPeriods) {
+        const d = new Date(exit.date);
+        const closed = tx.select().from(schema.closedPeriods).where(and(eq(schema.closedPeriods.year, d.getFullYear()), eq(schema.closedPeriods.month, d.getMonth() + 1))).all();
+        if (closed.length > 0) throw new Error("No se puede eliminar un registro de un mes que ya ha sido cerrado contablemente.");
       }
-      newDenom = currentDenom;
 
-      await db.delete(schema.invoices).where(eq(schema.invoices.exitId, id));
-    }
-
-    await db.update(schema.cashBox)
-      .set({ denominations: newDenom, totalAmount: this.calculateTotal(newDenom), lastUpdated: new Date() })
-      .where(eq(schema.cashBox.id, box.id));
-
-    await db.delete(schema.exits).where(eq(schema.exits.id, id));
+      const [box] = tx.select().from(schema.cashBox).limit(1).all();
+      let newDenom: Denomination;
+      if (exit.isPending) {
+        newDenom = this.addDenominations(box.denominations, exit.denominationsGiven);
+      } else {
+        const changeRecords = tx.select().from(schema.changeRecords).where(eq(schema.changeRecords.exitId, id)).all();
+        let currentDenom = this.addDenominations(box.denominations, exit.denominationsGiven);
+        for (const change of changeRecords) {
+          currentDenom = this.strictSubtract(currentDenom, change.denominations);
+        }
+        tx.delete(schema.changeRecords).where(eq(schema.changeRecords.exitId, id)).run();
+        tx.delete(schema.invoices).where(eq(schema.invoices.exitId, id)).run();
+        newDenom = currentDenom;
+      }
+      tx.update(schema.cashBox)
+        .set({ denominations: newDenom, totalAmount: this.calculateTotal(newDenom), lastUpdated: new Date() })
+        .where(eq(schema.cashBox.id, box.id))
+        .run();
+      tx.delete(schema.exits).where(eq(schema.exits.id, id)).run();
+    });
   }
 
   /** Full completion: invoices + change must equal initial amount exactly */
   async completeExit(completion: CompleteExit): Promise<Exit> {
-    const [exit] = await db.select().from(schema.exits).where(eq(schema.exits.id, completion.exitId));
-    if (!exit) throw new Error("Salida no encontrada");
+    return db.transaction((tx) => {
+      const [exit] = tx.select().from(schema.exits).where(eq(schema.exits.id, completion.exitId)).all();
+      if (!exit) throw new Error("Salida no encontrada");
+      if (!exit.isPending) throw new Error("Esta salida ya fue completada.");
 
-    let totalInvoiceAmount = 0;
-    for (const inv of completion.invoices) {
-      totalInvoiceAmount += inv.amount;
-    }
-    const changeAmount = this.calculateTotal(completion.changeGiven);
-    const expectedTotal = totalInvoiceAmount + changeAmount;
+      const totalInvoiceAmount = completion.invoices.reduce((sum, inv) => sum + inv.amount, 0);
+      const changeAmount = this.calculateTotal(completion.changeGiven);
 
-    if (Math.abs(expectedTotal - exit.initialAmount) > 0.01) {
-      throw new Error(
-        `Cierre inválido: facturas (${totalInvoiceAmount.toFixed(2)}) + vuelto (${changeAmount.toFixed(2)}) = ${expectedTotal.toFixed(2)} ` +
-        `pero el monto entregado fue ${exit.initialAmount.toFixed(2)}`
-      );
-    }
+      const alreadyRendered = exit.renderedAmount + exit.changeAmount;
+      const newlyRendered = totalInvoiceAmount + changeAmount;
 
-    for (const invoiceData of completion.invoices) {
-      const voucherId = await this.getNextVoucherNumber();
-      await db.insert(schema.invoices).values({
-        ...invoiceData,
-        exitId: exit.id,
-        voucherId
-      });
-    }
-
-    if (changeAmount > 0) {
-      await db.insert(schema.changeRecords).values({
-        exitId: exit.id,
-        denominations: completion.changeGiven,
-        totalAmount: changeAmount
-      });
-
-      // Change returns to the physical box
-      const box = await this.getCashBox();
-      const updatedDenom = this.addDenominations(box.denominations, completion.changeGiven);
-      await db.update(schema.cashBox)
-        .set({ denominations: updatedDenom, totalAmount: this.calculateTotal(updatedDenom), lastUpdated: new Date() })
-        .where(eq(schema.cashBox.id, box.id));
-    }
-
-    const [completedExit] = await db.update(schema.exits)
-      .set({ 
-        isPending: false, 
-        completedAt: new Date(),
-        renderedAmount: totalInvoiceAmount,
-        changeAmount: changeAmount
-      })
-      .where(eq(schema.exits.id, exit.id))
-      .returning();
-
-    return completedExit;
+      if (alreadyRendered + newlyRendered !== exit.initialAmount) {
+        throw new Error(`La suma de lo rendido ahora ($${(newlyRendered/100).toFixed(2)}) y lo rendido previamente ($${(alreadyRendered/100).toFixed(2)}) debe ser igual al monto inicial ($${(exit.initialAmount/100).toFixed(2)}).`);
+      }
+      for (const invoiceData of completion.invoices) {
+        const voucherId = this.allocateNextVoucherNumber(tx);
+        tx.insert(schema.invoices).values({ ...invoiceData, exitId: exit.id, voucherId }).run();
+      }
+      if (changeAmount > 0) {
+        tx.insert(schema.changeRecords).values({
+          exitId: exit.id,
+          denominations: completion.changeGiven,
+          totalAmount: changeAmount
+        }).run();
+        const [box] = tx.select().from(schema.cashBox).limit(1).all();
+        const updatedDenom = this.addDenominations(box.denominations, completion.changeGiven);
+        tx.update(schema.cashBox)
+          .set({ denominations: updatedDenom, totalAmount: this.calculateTotal(updatedDenom), lastUpdated: new Date() })
+          .where(eq(schema.cashBox.id, box.id))
+          .run();
+      }
+      const [completedExit] = tx.update(schema.exits)
+        .set({
+          isPending: false,
+          completedAt: new Date(),
+          renderedAmount: exit.renderedAmount + totalInvoiceAmount,
+          changeAmount: exit.changeAmount + changeAmount
+        })
+        .where(eq(schema.exits.id, exit.id))
+        .returning().all();
+      return completedExit;
+    });
   }
 
   /** Incremental completion: add invoices and/or change without requiring full balance */
   async addToExit(data: AddToExit): Promise<Exit> {
-    const [exit] = await db.select().from(schema.exits).where(eq(schema.exits.id, data.exitId));
-    if (!exit) throw new Error("Salida no encontrada");
-    if (!exit.isPending) throw new Error("Esta salida ya fue completada.");
+    return db.transaction((tx) => {
+      const [exit] = tx.select().from(schema.exits).where(eq(schema.exits.id, data.exitId)).all();
+      if (!exit) throw new Error("Salida no encontrada");
+      if (!exit.isPending) throw new Error("Esta salida ya fue completada.");
 
-    let newRendered = exit.renderedAmount;
-    let newChangeAmount = exit.changeAmount;
+      let newRendered = exit.renderedAmount;
+      let newChangeAmount = exit.changeAmount;
 
-    // Validate over-rendering before proceeding
-    let incomingInvoicesTotal = 0;
-    if (data.invoices && data.invoices.length > 0) {
-      incomingInvoicesTotal = data.invoices.reduce((sum, inv) => sum + inv.amount, 0);
-    }
-    const incomingChangeTotal = data.changeGiven ? this.calculateTotal(data.changeGiven) : 0;
-    
-    if (newRendered + newChangeAmount + incomingInvoicesTotal + incomingChangeTotal > exit.initialAmount + 0.01) {
-      throw new Error(`No se puede rendir más de lo entregado (${exit.initialAmount.toFixed(2)} US$). Reduzca el monto de las facturas o el vuelto.`);
-    }
-
-    // Add invoices
-    if (data.invoices && data.invoices.length > 0) {
-      for (const invoiceData of data.invoices) {
-        const voucherId = await this.getNextVoucherNumber();
-        await db.insert(schema.invoices).values({
-          ...invoiceData,
-          exitId: exit.id,
-          voucherId
-        });
-        newRendered += invoiceData.amount;
+      // Add invoices
+      if (data.invoices && data.invoices.length > 0) {
+        for (const invoiceData of data.invoices) {
+          const voucherId = this.allocateNextVoucherNumber(tx);
+          tx.insert(schema.invoices).values({
+            ...invoiceData,
+            exitId: exit.id,
+            voucherId
+          }).run();
+          newRendered = newRendered + invoiceData.amount;
+        }
       }
-    }
 
-    // Add change
-    if (data.changeGiven) {
-      const changeAmount = this.calculateTotal(data.changeGiven);
-      if (changeAmount > 0) {
-        await db.insert(schema.changeRecords).values({
-          exitId: exit.id,
-          denominations: data.changeGiven,
-          totalAmount: changeAmount
-        });
+      // Add change
+      if (data.changeGiven) {
+        const changeAmount = this.calculateTotal(data.changeGiven);
+        if (changeAmount > 0) {
+          tx.insert(schema.changeRecords).values({
+            exitId: exit.id,
+            denominations: data.changeGiven,
+            totalAmount: changeAmount
+          }).run();
 
-        const box = await this.getCashBox();
-        const updatedDenom = this.addDenominations(box.denominations, data.changeGiven);
-        await db.update(schema.cashBox)
-          .set({ denominations: updatedDenom, totalAmount: this.calculateTotal(updatedDenom), lastUpdated: new Date() })
-          .where(eq(schema.cashBox.id, box.id));
+          const [box] = tx.select().from(schema.cashBox).limit(1).all();
+          const updatedDenom = this.addDenominations(box.denominations, data.changeGiven);
+          tx.update(schema.cashBox)
+            .set({ denominations: updatedDenom, totalAmount: this.calculateTotal(updatedDenom), lastUpdated: new Date() })
+            .where(eq(schema.cashBox.id, box.id))
+            .run();
 
-        newChangeAmount += changeAmount;
+          newChangeAmount = newChangeAmount + changeAmount;
+        }
       }
-    }
 
-    // Check if we can auto-complete
-    const totalAccountedFor = newRendered + newChangeAmount;
-    const isFullyRendered = Math.abs(totalAccountedFor - exit.initialAmount) < 0.01;
-    const shouldComplete = isFullyRendered || data.forceComplete;
+      // Check if we can auto-complete
+      const totalAccountedFor = newRendered + newChangeAmount;
+      if (totalAccountedFor > exit.initialAmount) {
+        throw new Error(`Error: El monto total rendido ($${(totalAccountedFor/100).toFixed(2)}) superaría el monto inicial de la salida ($${(exit.initialAmount/100).toFixed(2)}).`);
+      }
 
-    const [updatedExit] = await db.update(schema.exits)
-      .set({
-        renderedAmount: newRendered,
-        changeAmount: newChangeAmount,
-        isPending: shouldComplete ? false : true,
-        completedAt: shouldComplete ? new Date() : undefined
-      })
-      .where(eq(schema.exits.id, exit.id))
-      .returning();
+      const isFullyRendered = totalAccountedFor === exit.initialAmount;
+      const shouldComplete = isFullyRendered || data.forceComplete;
 
-    return updatedExit;
+      const [updatedExit] = tx.update(schema.exits)
+        .set({
+          renderedAmount: newRendered,
+          changeAmount: newChangeAmount,
+          isPending: shouldComplete ? false : true,
+          completedAt: shouldComplete ? new Date() : undefined
+        })
+        .where(eq(schema.exits.id, exit.id))
+        .returning().all();
+
+      return updatedExit;
+    });
   }
 
   // ─── INVOICES & CHANGE ──────────────────────────────────
@@ -604,9 +705,10 @@ export class SqliteStorage implements IStorage {
       .orderBy(schema.invoices.createdAt);
   }
 
-  async getChangeByExitId(exitId: string): Promise<ChangeRecord | undefined> {
-    const [change] = await db.select().from(schema.changeRecords).where(eq(schema.changeRecords.exitId, exitId));
-    return change;
+  async getChangeByExitId(exitId: string): Promise<ChangeRecord[]> {
+    return await db.select().from(schema.changeRecords)
+      .where(eq(schema.changeRecords.exitId, exitId))
+      .orderBy(schema.changeRecords.createdAt);
   }
 
   // ─── CASH EXCHANGES (FEREAR) ────────────────────────────
@@ -615,35 +717,35 @@ export class SqliteStorage implements IStorage {
     return await db.select().from(schema.cashExchanges).orderBy(desc(schema.cashExchanges.createdAt));
   }
 
+  async getCashAdjustments(): Promise<CashAdjustment[]> {
+    return await db.select().from(schema.cashAdjustments).orderBy(desc(schema.cashAdjustments.createdAt));
+  }
+
   async createCashExchange(exchange: InsertCashExchange): Promise<CashExchange> {
-    const inTotal = this.calculateTotal(exchange.denominationsIn);
-    const outTotal = this.calculateTotal(exchange.denominationsOut);
-
-    if (Math.abs(inTotal - outTotal) > 0.01) {
-      throw new Error(
-        `Cambio inválido: lo que entra ($${inTotal.toFixed(2)}) no es igual a lo que sale ($${outTotal.toFixed(2)}). ` +
-        `En un cambio de billetes la suma neta debe ser $0.`
-      );
-    }
-
-    const box = await this.getCashBox();
-    // Remove the denominations going out
-    const afterRemoval = this.smartSubtract(box.denominations, exchange.denominationsOut);
-    // Add the denominations coming in
-    const afterAddition = this.addDenominations(afterRemoval, exchange.denominationsIn);
-
-    const [record] = await db.insert(schema.cashExchanges).values({
-      denominationsIn: exchange.denominationsIn,
-      denominationsOut: exchange.denominationsOut,
-      totalAmount: inTotal,
-      detail: exchange.detail || null
-    }).returning();
-
-    await db.update(schema.cashBox)
-      .set({ denominations: afterAddition, totalAmount: this.calculateTotal(afterAddition), lastUpdated: new Date() })
-      .where(eq(schema.cashBox.id, box.id));
-
-    return record;
+    return db.transaction((tx) => {
+      const inTotal = this.calculateTotal(exchange.denominationsIn);
+      const outTotal = this.calculateTotal(exchange.denominationsOut);
+      if (inTotal !== outTotal) {
+        throw new Error(
+          `Cambio inválido: lo que entra ($${(inTotal/100).toFixed(2)}) no es igual a lo que sale ($${(outTotal/100).toFixed(2)}). ` +
+          `En un cambio de billetes la suma neta debe ser $0.`
+        );
+      }
+      const [box] = tx.select().from(schema.cashBox).limit(1).all();
+      const afterRemoval = this.strictSubtract(box.denominations, exchange.denominationsOut);
+      const afterAddition = this.addDenominations(afterRemoval, exchange.denominationsIn);
+      const [record] = tx.insert(schema.cashExchanges).values({
+        denominationsIn: exchange.denominationsIn,
+        denominationsOut: exchange.denominationsOut,
+        totalAmount: inTotal,
+        detail: exchange.detail || null
+      }).returning().all();
+      tx.update(schema.cashBox)
+        .set({ denominations: afterAddition, totalAmount: this.calculateTotal(afterAddition), lastUpdated: new Date() })
+        .where(eq(schema.cashBox.id, box.id))
+        .run();
+      return record;
+    });
   }
 
   // ─── CONFIGURATION ──────────────────────────────────────
@@ -655,61 +757,186 @@ export class SqliteStorage implements IStorage {
 
   async updateConfiguration(config: UpdateConfig): Promise<Configuration> {
     const current = await this.getConfiguration();
+    // Merge: only update fields that are explicitly provided
+    const updatePayload: Partial<typeof config> = { ...config };
     const [updated] = await db.update(schema.configuration)
-      .set({ ...config, lastUpdated: new Date() })
+      .set({ ...updatePayload, lastUpdated: new Date() })
       .where(eq(schema.configuration.id, current.id))
       .returning();
     return updated;
   }
 
   async getNextVoucherNumber(): Promise<number> {
+    return db.transaction((tx) => this.allocateNextVoucherNumber(tx));
+  }
+
+  async syncNextVoucherNumber(): Promise<number> {
     const config = await this.getConfiguration();
-    const current = config.nextVoucherNumber;
+    const [[maxIncome], [maxInvoice], [maxExit]] = await Promise.all([
+      db.select({ val: sql<number>`max(voucher_id)` }).from(schema.incomes),
+      db.select({ val: sql<number>`max(voucher_id)` }).from(schema.invoices),
+      db.select({ val: sql<number>`max(voucher_id)` }).from(schema.exits)
+    ]);
+    
+    const dbMax = Math.max(
+      Number(maxIncome?.val || 0),
+      Number(maxInvoice?.val || 0),
+      Number(maxExit?.val || 0)
+    );
+
+    const nextNumber = dbMax + 1;
+
     await db.update(schema.configuration)
-      .set({ nextVoucherNumber: current + 1, lastUpdated: new Date() })
+      .set({ 
+        nextVoucherNumber: nextNumber, 
+        lastUpdated: new Date() 
+      })
       .where(eq(schema.configuration.id, config.id));
-    return current;
+      
+    return nextNumber;
   }
 
   // ─── REPORTS ────────────────────────────────────────────
 
-  async getMovementsByMonth(year: number, month: number): Promise<any[]> {
-    const allIncomes = await db.select().from(schema.incomes);
-    const allInvoices = await db.select().from(schema.invoices);
+  async getMovementsByMonth(year: number, month: number): Promise<{ movements: any[], previousBalance: number }> {
+    const startOfTargetMonth = new Date(year, month - 1, 1);
+    const endOfTargetMonth = new Date(year, month, 1);
 
+    // Fetch monthly target movements and aggregates in parallel
+    const [
+      targetIncomes,
+      targetInvoices,
+      targetAdjustments,
+      targetExits,
+      [incomeSum],
+      [invoiceSum],
+      [adjSum],
+      allExitsBefore,
+      allInvoicesBefore
+    ] = await Promise.all([
+      db.select().from(schema.incomes)
+        .where(and(gte(schema.incomes.date, startOfTargetMonth), lt(schema.incomes.date, endOfTargetMonth))),
+      db.select().from(schema.invoices)
+        .where(and(gte(schema.invoices.date, startOfTargetMonth), lt(schema.invoices.date, endOfTargetMonth))),
+      db.select().from(schema.cashAdjustments)
+        .where(and(gte(schema.cashAdjustments.createdAt, startOfTargetMonth), lt(schema.cashAdjustments.createdAt, endOfTargetMonth))),
+      db.select().from(schema.exits)
+        .where(and(
+          eq(schema.exits.isPending, false),
+          gte(schema.exits.date, startOfTargetMonth), 
+          lt(schema.exits.date, endOfTargetMonth)
+        )),
+      db.select({ val: sql<number>`sum(total_amount)` }).from(schema.incomes)
+        .where(lt(schema.incomes.date, startOfTargetMonth)),
+      db.select({ val: sql<number>`sum(amount)` }).from(schema.invoices)
+        .where(lt(schema.invoices.date, startOfTargetMonth)),
+      db.select({ val: sql<number>`sum(difference)` }).from(schema.cashAdjustments)
+        .where(lt(schema.cashAdjustments.createdAt, startOfTargetMonth)),
+      db.select().from(schema.exits)
+        .where(and(eq(schema.exits.isPending, false), lt(schema.exits.date, startOfTargetMonth))),
+      db.select({ exitId: schema.invoices.exitId }).from(schema.invoices)
+        .where(lt(schema.invoices.date, startOfTargetMonth))
+    ]);
+
+    const invoiceExitIdsBefore = new Set(allInvoicesBefore.map(inv => inv.exitId));
+    
+    let historicalExitSum = 0;
+    for (const exit of allExitsBefore) {
+      if (!invoiceExitIdsBefore.has(exit.id)) {
+        historicalExitSum += (exit.renderedAmount ?? exit.initialAmount);
+      }
+    }
+
+    let previousBalance = Number(incomeSum?.val || 0) - Number(invoiceSum?.val || 0) + Number(adjSum?.val || 0) - historicalExitSum;
+
+    const invoiceExitIds = new Set(targetInvoices.map(inv => inv.exitId));
     const movements: any[] = [];
 
-    for (const income of allIncomes) {
-      const date = new Date(income.date);
-      if (date.getFullYear() === year && date.getMonth() === month - 1) {
-        movements.push({
-          type: 'income',
-          date: income.date,
-          voucherId: income.voucherId,
-          detail: income.detail,
-          inAmount: income.totalAmount,
-          outAmount: 0,
-          createdAt: income.createdAt
-        });
-      }
+    for (const income of targetIncomes) {
+      movements.push({
+        type: 'income',
+        date: income.date,
+        voucherId: income.voucherId,
+        detail: income.detail,
+        inAmount: income.totalAmount,
+        outAmount: 0,
+        createdAt: income.createdAt
+      });
     }
 
-    for (const invoice of allInvoices) {
-      const date = new Date(invoice.date);
-      if (date.getFullYear() === year && date.getMonth() === month - 1) {
+    for (const invoice of targetInvoices) {
+      movements.push({
+        type: 'invoice',
+        date: invoice.date,
+        voucherId: invoice.voucherId,
+        detail: invoice.detail,
+        inAmount: 0,
+        outAmount: invoice.amount,
+        createdAt: invoice.createdAt
+      });
+    }
+
+    for (const exit of targetExits) {
+      if (!invoiceExitIds.has(exit.id)) {
         movements.push({
-          type: 'invoice',
-          date: invoice.date,
-          voucherId: invoice.voucherId,
-          detail: invoice.detail,
+          type: 'exit_historical',
+          date: exit.date,
+          voucherId: exit.voucherId,
+          detail: exit.purpose,
           inAmount: 0,
-          outAmount: invoice.amount,
-          createdAt: invoice.createdAt
+          outAmount: exit.renderedAmount ?? exit.initialAmount,
+          createdAt: exit.createdAt
         });
       }
     }
 
-    return movements.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    for (const adj of targetAdjustments) {
+      movements.push({
+        type: 'adjustment',
+        date: adj.createdAt,
+        voucherId: null,
+        detail: `Arqueo de Caja (${adj.difference >= 0 ? '+' : ''}${(adj.difference/100).toFixed(2)})`,
+        inAmount: adj.difference > 0 ? adj.difference : 0,
+        outAmount: adj.difference < 0 ? Math.abs(adj.difference) : 0,
+        createdAt: adj.createdAt
+      });
+    }
+
+    return { 
+      movements: movements.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+      previousBalance 
+    };
+  }
+
+  // ─── AUDIT & SECURITY ───────────────────────────────────
+
+  async getAuditLogs(entityId: string): Promise<schema.AuditLog[]> {
+    return await db.select().from(schema.auditLogs)
+      .where(eq(schema.auditLogs.entityId, entityId))
+      .orderBy(desc(schema.auditLogs.createdAt));
+  }
+
+  async getClosedPeriods(): Promise<schema.ClosedPeriod[]> {
+    return await db.select().from(schema.closedPeriods).orderBy(desc(schema.closedPeriods.year), desc(schema.closedPeriods.month));
+  }
+
+  async closePeriod(year: number, month: number): Promise<schema.ClosedPeriod> {
+    const existing = await db.select().from(schema.closedPeriods)
+      .where(and(eq(schema.closedPeriods.year, year), eq(schema.closedPeriods.month, month)));
+    if (existing && existing.length > 0) {
+      throw new Error(`El período ${month}/${year} ya se encuentra cerrado.`);
+    }
+    const [closed] = await db.insert(schema.closedPeriods).values({ year, month }).returning();
+    return closed;
+  }
+
+  async isPeriodClosed(date: Date): Promise<boolean> {
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    const closed = await db.select().from(schema.closedPeriods)
+      .where(and(eq(schema.closedPeriods.year, year), eq(schema.closedPeriods.month, month)));
+    return closed && closed.length > 0;
   }
 }
 

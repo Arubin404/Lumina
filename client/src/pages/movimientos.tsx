@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Plus, Minus, Clock, CheckCircle, Edit3, Search, AlertTriangle, MoreVertical, Trash, Edit, ChevronDown, ChevronUp, FileText, ArrowLeftRight } from "lucide-react";
+import { Plus, Minus, Clock, CheckCircle, Edit3, Search, AlertTriangle, MoreVertical, Trash, Edit, ChevronDown, ChevronUp, FileText, ArrowLeftRight, RefreshCw, ArrowUp, ArrowDown, Equal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,17 +11,31 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { formatCurrency } from "@/lib/denomination-utils";
-import { Income, Exit, Invoice } from "@shared/schema";
+import { Income, Exit, Invoice, CashAdjustment, Configuration, ClosedPeriod, AuditLog } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import IncomeModal from "@/components/modals/income-modal";
 import ExitModal from "@/components/modals/exit-modal";
+import EditWarningModal from "@/components/modals/edit-warning-modal";
+import AuditLogModal from "@/components/modals/audit-log-modal";
 
-type MovementType = "all" | "income" | "exit" | "pending_exit" | "edited";
+type MovementType = "all" | "income" | "exit" | "pending_exit" | "edited" | "adjustment";
+
+function getDaysSince(dateStr: string): number {
+  const created = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - created.getTime();
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+}
+
+function isExpiredEdit(movement: { createdAt: string; type: string }, editWindowDays: number): boolean {
+  if (movement.type === "adjustment") return false;
+  return getDaysSince(movement.createdAt) > editWindowDays;
+}
 
 interface Movement {
   id: string;
-  type: "income" | "exit" | "pending_exit";
+  type: "income" | "exit" | "pending_exit" | "adjustment";
   detail: string;
   amount: number;
   voucherId?: number;
@@ -32,7 +46,7 @@ interface Movement {
   renderedAmount?: number;
   changeAmount?: number;
   initialAmount?: number;
-  rawData: Income | Exit;
+  rawData: Income | Exit | CashAdjustment;
 }
 
 export default function Movimientos() {
@@ -45,8 +59,25 @@ export default function Movimientos() {
   const [editingIncome, setEditingIncome] = useState<Income | null>(null);
   const [editingExit, setEditingExit] = useState<Exit | null>(null);
   
+  // Edit warning modal state
+  const [editWarning, setEditWarning] = useState<{ movement: Movement; daysSince: number } | null>(null);
+
+  // Audit log modal state
+  const [auditLogEntityId, setAuditLogEntityId] = useState<string | null>(null);
+  const [showEditedAlert, setShowEditedAlert] = useState(true);
+  
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const { data: config } = useQuery<Configuration>({
+    queryKey: ["/api/config"],
+  });
+
+  const { data: closedPeriods } = useQuery<ClosedPeriod[]>({
+    queryKey: ["/api/periods/closed"],
+  });
+
+  const editWindowDays = config?.editWindowDays ?? 20;
 
   const { data: incomes, isLoading: incomesLoading } = useQuery<Income[]>({
     queryKey: ["/api/incomes"],
@@ -58,7 +89,12 @@ export default function Movimientos() {
     refetchInterval: 10000,
   });
 
-  const isLoading = incomesLoading || exitsLoading;
+  const { data: adjustments, isLoading: adjustmentsLoading } = useQuery<CashAdjustment[]>({
+    queryKey: ["/api/cash-adjustments"],
+    refetchInterval: 10000,
+  });
+
+  const isLoading = incomesLoading || exitsLoading || adjustmentsLoading;
 
   const deleteMutation = useMutation({
     mutationFn: async ({ id, type }: { id: string; type: "income" | "exit" | "pending_exit" }) => {
@@ -83,12 +119,34 @@ export default function Movimientos() {
     }
   };
 
-  const handleEdit = (movement: Movement) => {
+  const doEdit = (movement: Movement) => {
     if (movement.type === "income") {
       setEditingIncome(movement.rawData as Income);
     } else {
       setEditingExit(movement.rawData as Exit);
     }
+  };
+
+  const handleEdit = (movement: Movement) => {
+    const days = getDaysSince(movement.createdAt);
+    if (days > editWindowDays) {
+      // Show warning modal
+      setEditWarning({ movement, daysSince: days });
+    } else {
+      if (config?.confirmBeforeEdit) {
+        if (confirm("¿Estás seguro de que quieres editar este registro?")) {
+          doEdit(movement);
+        }
+      } else {
+        doEdit(movement);
+      }
+    }
+  };
+
+  const isMovementClosed = (dateStr: string) => {
+    if (!config?.lockClosedPeriods || !closedPeriods) return false;
+    const d = new Date(dateStr);
+    return closedPeriods.some(cp => cp.year === d.getFullYear() && cp.month === (d.getMonth() + 1));
   };
 
   // Combine all movements
@@ -108,8 +166,8 @@ export default function Movimientos() {
       id: exit.id,
       type: exit.isPending ? "pending_exit" as const : "exit" as const,
       detail: exit.purpose,
-      amount: exit.initialAmount,
-      voucherId: undefined,
+      amount: exit.isPending ? (exit.initialAmount - (exit.renderedAmount + exit.changeAmount)) : (exit.renderedAmount || exit.initialAmount),
+      voucherId: exit.voucherId || undefined,
       date: String(exit.date || ""),
       createdAt: String(exit.createdAt || ""),
       isEdited: exit.editedAt !== null,
@@ -118,42 +176,55 @@ export default function Movimientos() {
       changeAmount: exit.changeAmount,
       initialAmount: exit.initialAmount,
       rawData: exit
+    })) || []),
+    ...(adjustments?.map(adj => ({
+      id: adj.id,
+      type: "adjustment" as const,
+      detail: `Arqueo de Caja`,
+      amount: Math.abs(adj.difference),
+      voucherId: undefined,
+      date: String(adj.createdAt || ""),
+      createdAt: String(adj.createdAt || ""),
+      isEdited: false,
+      rawData: adj
     })) || [])
-  ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()); // Chronological order for balance calculation
 
-  // Calculate running balance (like the Excel)
-  const movementsWithBalance = allMovements.map((movement, index) => {
-    const previousBalance = allMovements.slice(0, index).reduce((balance, m) => {
-      if (m.type === "income") return balance + m.amount;
-      if (m.type === "exit") return balance - m.amount;
-      // pending_exit: money is "out" physically but not yet a confirmed expense
-      return balance;
-    }, 0);
-    
-    let currentBalance: number;
+  // Calculate running balance efficiently in a single pass (O(N))
+  let rollingBalance = 0;
+  const movementsWithBalance = allMovements.map((movement) => {
     if (movement.type === "income") {
-      currentBalance = previousBalance + movement.amount;
+      rollingBalance += movement.amount;
     } else if (movement.type === "exit") {
-      currentBalance = previousBalance - movement.amount;
-    } else {
-      currentBalance = previousBalance;
+      rollingBalance -= movement.amount;
+    } else if (movement.type === "adjustment") {
+      // Adjustments directly change the physical box, so they affect the theoretical balance
+      // as they represent a reconciliation between the ledger and reality.
+      rollingBalance += (movement.rawData as CashAdjustment).difference;
     }
+    // pending_exit: money is "out" physically but not yet a confirmed expense in the ledger
+    // so it doesn't subtract from the running theoretical balance yet.
 
-    return { ...movement, runningBalance: currentBalance };
+    return { ...movement, runningBalance: rollingBalance };
   });
+
+  // Now reverse for display (most recent first)
+  const displayMovements = [...movementsWithBalance].reverse();
 
   const getMovementsForTab = () => {
     switch (activeTab) {
       case "incomes":
-        return movementsWithBalance.filter(m => m.type === "income");
+        return displayMovements.filter(m => m.type === "income");
       case "exits":
-        return movementsWithBalance.filter(m => m.type === "exit");
+        return displayMovements.filter(m => m.type === "exit");
       case "pending":
-        return movementsWithBalance.filter(m => m.type === "pending_exit");
+        return displayMovements.filter(m => m.type === "pending_exit");
       case "edited":
-        return movementsWithBalance.filter(m => m.isEdited);
+        return displayMovements.filter(m => m.isEdited);
+      case "adjustments":
+        return displayMovements.filter(m => m.type === "adjustment");
       default:
-        return movementsWithBalance;
+        return displayMovements;
     }
   };
 
@@ -183,10 +254,11 @@ export default function Movimientos() {
   const exitCount = allMovements.filter(m => m.type === "exit").length;
   const pendingCount = allMovements.filter(m => m.type === "pending_exit").length;
   const editedCount = allMovements.filter(m => m.isEdited).length;
+  const adjustmentCount = allMovements.filter(m => m.type === "adjustment").length;
 
   const totalIncome = allMovements.filter(m => m.type === "income").reduce((sum, m) => sum + m.amount, 0);
   const totalExit = allMovements.filter(m => m.type === "exit").reduce((sum, m) => sum + m.amount, 0);
-  const totalPending = allMovements.filter(m => m.type === "pending_exit").reduce((sum, m) => sum + m.amount, 0);
+  const totalPending = allMovements.filter(m => m.type === "pending_exit").reduce((sum, m) => sum + Math.max(0, m.amount), 0);
   const theoreticalBalance = totalIncome - totalExit;
 
   const getMovementIcon = (type: string) => {
@@ -194,9 +266,11 @@ export default function Movimientos() {
       case "income":
         return <Plus className="h-4 w-8 text-white" />;
       case "pending_exit":
-        return <Clock className="h-4 w-4 text-warning-foreground" />;
+        return <Clock className="size-4 text-warning-foreground" />;
+      case "adjustment":
+        return <RefreshCw className="size-4 text-white" />;
       default:
-        return <Minus className="h-4 w-4 text-white" />;
+        return <Minus className="size-4 text-white" />;
     }
   };
 
@@ -206,6 +280,8 @@ export default function Movimientos() {
         return "bg-success";
       case "pending_exit":
         return "bg-warning";
+      case "adjustment":
+        return "bg-blue-600";
       default:
         return "bg-destructive";
     }
@@ -217,6 +293,8 @@ export default function Movimientos() {
         return "Ingreso";
       case "pending_exit":
         return "Salida Pendiente";
+      case "adjustment":
+        return "Ajuste de Caja";
       default:
         return "Salida";
     }
@@ -252,8 +330,8 @@ export default function Movimientos() {
                     {formatCurrency(totalIncome)}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-success/10 rounded-lg flex items-center justify-center">
-                  <Plus className="text-success h-6 w-6" />
+                <div className="size-12 bg-success/10 rounded-lg flex items-center justify-center">
+                  <Plus className="text-success size-6" />
                 </div>
               </div>
             </CardContent>
@@ -269,8 +347,8 @@ export default function Movimientos() {
                     {formatCurrency(totalExit)}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-destructive/10 rounded-lg flex items-center justify-center">
-                  <Minus className="text-destructive h-6 w-6" />
+                <div className="size-12 bg-destructive/10 rounded-lg flex items-center justify-center">
+                  <Minus className="text-destructive size-6" />
                 </div>
               </div>
             </CardContent>
@@ -286,8 +364,8 @@ export default function Movimientos() {
                     {formatCurrency(totalPending)}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-warning/10 rounded-lg flex items-center justify-center">
-                  <Clock className="text-warning h-6 w-6" />
+                <div className="size-12 bg-warning/10 rounded-lg flex items-center justify-center">
+                  <Clock className="text-warning size-6" />
                 </div>
               </div>
             </CardContent>
@@ -305,8 +383,8 @@ export default function Movimientos() {
                     Ingresos - Salidas
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                  <ArrowLeftRight className="text-primary h-6 w-6" />
+                <div className="size-12 bg-primary/10 rounded-lg flex items-center justify-center">
+                  <ArrowLeftRight className="text-primary size-6" />
                 </div>
               </div>
             </CardContent>
@@ -322,7 +400,7 @@ export default function Movimientos() {
                   Buscar movimientos
                 </Label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
                   <Input
                     id="search"
                     value={searchTerm}
@@ -345,6 +423,7 @@ export default function Movimientos() {
                     <SelectItem value="income">Ingresos</SelectItem>
                     <SelectItem value="exit">Salidas</SelectItem>
                     <SelectItem value="pending_exit">Pendientes</SelectItem>
+                    <SelectItem value="adjustment">Ajustes de Caja</SelectItem>
                     <SelectItem value="edited">Editados</SelectItem>
                   </SelectContent>
                 </Select>
@@ -359,6 +438,8 @@ export default function Movimientos() {
                   type="date"
                   value={dateFilter}
                   onChange={(e) => setDateFilter(e.target.value)}
+                  onClick={(e) => e.currentTarget.showPicker?.()}
+                  className="cursor-pointer"
                   data-testid="input-date-filter"
                 />
               </div>
@@ -367,18 +448,32 @@ export default function Movimientos() {
         </Card>
 
         {/* Edited Movements Warning */}
-        {editedCount > 0 && (
-          <Alert className="border-warning bg-warning/10">
-            <AlertTriangle className="h-4 w-4 text-warning" />
+        {editedCount > 0 && showEditedAlert && (
+          <Alert className="border-warning bg-warning/10 relative pr-10">
+            <AlertTriangle className="size-4 text-warning" />
             <AlertDescription className="text-warning">
               Hay {editedCount} movimientos que han sido editados. Revise estos registros para asegurar la integridad de los datos.
+              <Button
+                variant="link"
+                className="text-warning hover:text-warning/80 p-0 h-auto font-semibold underline ml-2 inline-block align-baseline"
+                onClick={() => setActiveTab("edited")}
+              >
+                Ver movimientos editados
+              </Button>
             </AlertDescription>
+            <button
+              onClick={() => setShowEditedAlert(false)}
+              className="absolute right-3 top-3 text-warning/60 hover:text-warning"
+              aria-label="Cerrar aviso"
+            >
+              <X className="size-4" />
+            </button>
           </Alert>
         )}
 
         {/* Movements Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="all" data-testid="tab-all-movements">
               Todos ({allMovements.length})
             </TabsTrigger>
@@ -390,6 +485,9 @@ export default function Movimientos() {
             </TabsTrigger>
             <TabsTrigger value="pending" data-testid="tab-pending">
               Pendientes ({pendingCount})
+            </TabsTrigger>
+            <TabsTrigger value="adjustments" data-testid="tab-adjustments">
+              Ajustes ({adjustmentCount})
             </TabsTrigger>
             <TabsTrigger value="edited" data-testid="tab-edited">
               Editados ({editedCount})
@@ -403,8 +501,9 @@ export default function Movimientos() {
                   {activeTab === "incomes" ? "Movimientos de Ingreso" :
                     activeTab === "exits" ? "Movimientos de Salida" :
                       activeTab === "pending" ? "Salidas Pendientes" :
-                        activeTab === "edited" ? "Movimientos Editados" :
-                          "Todos los Movimientos"}
+                        activeTab === "adjustments" ? "Ajustes de Caja" :
+                          activeTab === "edited" ? "Movimientos Editados" :
+                            "Todos los Movimientos"}
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -427,17 +526,40 @@ export default function Movimientos() {
                       <div className="col-span-1 text-right">Acciones</div>
                     </div>
 
-                    {filteredMovements.map((movement) => (
+                    {filteredMovements.map((movement, index) => {
+                      const movementMonth = new Date(movement.date).toLocaleString('es-ES', { month: 'long', year: 'numeric' }).toUpperCase();
+                      const previousMonth = index > 0 ? new Date(filteredMovements[index-1].date).toLocaleString('es-ES', { month: 'long', year: 'numeric' }).toUpperCase() : null;
+                      const showMonthDivider = activeTab === "all" && movementMonth !== previousMonth;
+
+                      return (
                       <div key={movement.id} data-testid={`movement-item-${movement.id}`}>
+                        {showMonthDivider && (
+                          <div className="flex items-center gap-4 py-3 my-2 opacity-80">
+                            <div className="h-px bg-border flex-1"></div>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="text-[10px] font-bold uppercase tracking-[0.2em] px-3 py-1 bg-background text-muted-foreground border-muted-foreground/30">
+                                {movementMonth}
+                              </Badge>
+                            </div>
+                            <div className="h-px bg-border flex-1"></div>
+                          </div>
+                        )}
                         <div
-                          className={`grid grid-cols-12 gap-2 px-4 py-3 rounded-lg border border-border hover:bg-muted/30 transition-colors cursor-pointer items-center ${
+                          className={`grid grid-cols-12 gap-2 px-4 py-3 rounded-lg border border-border hover:bg-muted/30 transition-colors cursor-pointer items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                             movement.type === "pending_exit" ? "border-l-4 border-l-warning" : ""
                           }`}
+                          role="button"
+                          tabIndex={0}
                           onClick={() => setExpandedMovement(expandedMovement === movement.id ? null : movement.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              setExpandedMovement(expandedMovement === movement.id ? null : movement.id);
+                            }
+                          }}
                         >
                           {/* Voucher */}
                           <div className="col-span-1 flex items-center gap-2">
-                            <Badge className={`w-6 h-6 rounded-full p-0 flex items-center justify-center ${getMovementBadgeColor(movement.type)}`}>
+                            <Badge className={`size-6 rounded-full p-0 flex items-center justify-center ${getMovementBadgeColor(movement.type)}`}>
                               {getMovementIcon(movement.type)}
                             </Badge>
                             {movement.voucherId ? (
@@ -453,7 +575,7 @@ export default function Movimientos() {
                               <span className="font-medium text-sm truncate">{movement.detail}</span>
                               {movement.isEdited && (
                                 <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20 text-[10px] px-1 py-0">
-                                  <Edit3 className="h-2.5 w-2.5" />
+                                  <Edit3 className="size-2.5" />
                                 </Badge>
                               )}
                               {movement.isPending && (
@@ -495,6 +617,10 @@ export default function Movimientos() {
                               <span className="font-semibold text-warning text-sm">
                                 ({formatCurrency(movement.amount)})
                               </span>
+                            ) : movement.type === "adjustment" ? (
+                              <span className={`font-semibold text-sm ${(movement.rawData as CashAdjustment).difference >= 0 ? 'text-success' : 'text-destructive'}`}>
+                                {(movement.rawData as CashAdjustment).difference >= 0 ? '+' : ''}{formatCurrency((movement.rawData as CashAdjustment).difference)}
+                              </span>
                             ) : (
                               <span className="text-muted-foreground/30 text-sm">—</span>
                             )}
@@ -509,43 +635,55 @@ export default function Movimientos() {
 
                           {/* Actions */}
                           <div className="col-span-1 text-right flex items-center justify-end gap-1">
-                            {(movement.type !== "exit" || movement.isPending) && (
+                            {movement.type !== "adjustment" && (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-muted" onClick={(e) => e.stopPropagation()}>
-                                    <MoreVertical className="h-3.5 w-3.5" />
+                                  <Button variant="ghost" size="icon" className="size-7 hover:bg-muted" onClick={(e) => e.stopPropagation()}>
+                                    <MoreVertical className="size-3.5" />
                                   </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" className="w-40">
-                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleEdit(movement); }}>
-                                    <Edit className="mr-2 h-4 w-4" />
-                                    <span>Editar</span>
-                                  </DropdownMenuItem>
+                                  {/* Edit: show if within editWindowDays OR with warning badge if expired */}
+                                  {!isExpiredEdit(movement, editWindowDays) ? (
+                                    <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleEdit(movement); }} disabled={isMovementClosed(movement.date)}>
+                                      <Edit className="mr-2 size-4" />
+                                      <span>{isMovementClosed(movement.date) ? 'Cerrado' : 'Editar'}</span>
+                                    </DropdownMenuItem>
+                                  ) : (
+                                    <DropdownMenuItem
+                                      onClick={(e) => { e.stopPropagation(); handleEdit(movement); }}
+                                      className="text-warning focus:text-warning"
+                                      disabled={isMovementClosed(movement.date)}
+                                    >
+                                      <AlertTriangle className="mr-2 size-4" />
+                                      <span>{isMovementClosed(movement.date) ? 'Cerrado' : `Editar (+${editWindowDays} días)`}</span>
+                                    </DropdownMenuItem>
+                                  )}
                                   <DropdownMenuItem 
                                     className="text-destructive focus:text-destructive"
-                                    onClick={(e) => { e.stopPropagation(); handleDelete(movement.id, movement.type); }}
-                                    disabled={deleteMutation.isPending}
+                                    onClick={(e) => { e.stopPropagation(); handleDelete(movement.id, movement.type as "income" | "exit" | "pending_exit"); }}
+                                    disabled={deleteMutation.isPending || isMovementClosed(movement.date)}
                                   >
-                                    <Trash className="mr-2 h-4 w-4" />
+                                    <Trash className="mr-2 size-4" />
                                     <span>Eliminar</span>
                                   </DropdownMenuItem>
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             )}
                             {expandedMovement === movement.id ? (
-                              <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                              <ChevronUp className="size-4 text-muted-foreground" />
                             ) : (
-                              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                              <ChevronDown className="size-4 text-muted-foreground" />
                             )}
                           </div>
                         </div>
 
                         {/* Expanded Details */}
                         {expandedMovement === movement.id && (
-                          <MovementDetails movement={movement} />
+                          <MovementDetails movement={movement} onShowAuditLog={() => setAuditLogEntityId(movement.id)} />
                         )}
                       </div>
-                    ))}
+                    )})}
                   </div>
                 )}
               </CardContent>
@@ -554,6 +692,35 @@ export default function Movimientos() {
         </Tabs>
       </div>
       
+      {/* Edit Warning Modal */}
+      {editWarning && (
+        <EditWarningModal
+          open={!!editWarning}
+          onOpenChange={(open) => !open && setEditWarning(null)}
+          daysSince={editWarning.daysSince}
+          editWindowDays={editWindowDays}
+          onConfirm={() => {
+            if (config?.confirmBeforeEdit) {
+              if (confirm("¿Estás seguro de que quieres forzar la edición de este registro antiguo?")) {
+                doEdit(editWarning.movement);
+              }
+            } else {
+              doEdit(editWarning.movement);
+            }
+            setEditWarning(null);
+          }}
+        />
+      )}
+
+      {/* Audit Log Modal */}
+      {auditLogEntityId && (
+        <AuditLogModal
+          open={!!auditLogEntityId}
+          onOpenChange={(open) => !open && setAuditLogEntityId(null)}
+          entityId={auditLogEntityId}
+        />
+      )}
+
       {/* Edit Modals */}
       {editingIncome && (
         <IncomeModal
@@ -575,12 +742,12 @@ export default function Movimientos() {
 }
 
 /** Expanded detail panel for a single movement */
-function MovementDetails({ movement }: { movement: Movement & { runningBalance: number } }) {
+function MovementDetails({ movement, onShowAuditLog }: { movement: Movement & { runningBalance: number }, onShowAuditLog: () => void }) {
   const isExit = movement.type === "exit" || movement.type === "pending_exit";
   const exitData = isExit ? (movement.rawData as Exit) : null;
 
   const { data: invoices } = useQuery<Invoice[]>({
-    queryKey: [`/api/exits/${movement.id}/invoices`],
+    queryKey: ["/api/exits", movement.id, "invoices"],
     enabled: isExit,
   });
 
@@ -597,9 +764,14 @@ function MovementDetails({ movement }: { movement: Movement & { runningBalance: 
           <span className="font-mono">{movement.id.slice(-12)}</span>
         </div>
         {movement.isEdited && (
-          <div className="text-warning">
-            <Edit3 className="inline h-3 w-3 mr-1" />
-            Movimiento editado
+          <div className="flex items-center gap-2">
+            <div className="text-warning">
+              <Edit3 className="inline size-3 mr-1" />
+              Movimiento editado
+            </div>
+            <Button variant="outline" size="sm" className="h-6 text-[10px] px-2" onClick={(e) => { e.stopPropagation(); onShowAuditLog(); }}>
+              Ver Historial
+            </Button>
           </div>
         )}
       </div>
@@ -641,7 +813,7 @@ function MovementDetails({ movement }: { movement: Movement & { runningBalance: 
           {invoices && invoices.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                <FileText className="h-3 w-3" /> Facturas ({invoices.length})
+                <FileText className="size-3" /> Facturas ({invoices.length})
               </p>
               <div className="space-y-1">
                 {invoices.map((invoice) => (
@@ -653,7 +825,7 @@ function MovementDetails({ movement }: { movement: Movement & { runningBalance: 
                       <span>{invoice.detail}</span>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs text-muted-foreground">{new Date(invoice.date).toLocaleDateString()}</span>
+                      <span className="text-xs text-muted-foreground" suppressHydrationWarning>{new Date(invoice.date).toLocaleDateString()}</span>
                       <span className="font-semibold text-destructive">{formatCurrency(invoice.amount)}</span>
                     </div>
                   </div>
@@ -663,18 +835,41 @@ function MovementDetails({ movement }: { movement: Movement & { runningBalance: 
           )}
         </>
       )}
+
+      {/* Adjustment details */}
+      {movement.type === "adjustment" && (() => {
+        const adj = movement.rawData as CashAdjustment;
+        return (
+          <div className="space-y-3">
+            <div className={`flex items-center gap-2 p-3 rounded-md border ${adj.difference > 0 ? 'bg-success/10 border-success/30' : adj.difference < 0 ? 'bg-destructive/10 border-destructive/30' : 'bg-blue-500/10 border-blue-500/30'}`}>
+              <RefreshCw className={`size-4 shrink-0 ${adj.difference > 0 ? 'text-success' : adj.difference < 0 ? 'text-destructive' : 'text-blue-400'}`} />
+              <div className="text-xs">
+                <p className="font-medium">
+                  {adj.difference === 0
+                    ? "Arqueo sin diferencia — las denominaciones fueron reorganizadas sin cambiar el total."
+                    : adj.difference > 0
+                      ? `Se detectó un sobrante de ${formatCurrency(adj.difference)}. El total de la caja aumentó.`
+                      : `Se detectó un faltante de ${formatCurrency(Math.abs(adj.difference))}. El total de la caja disminuyó.`}
+                </p>
+              </div>
+            </div>
+
+            <AdjustmentDiff previousDenominations={adj.previousDenominations} newDenominations={adj.newDenominations} previousTotal={adj.previousTotal} newTotal={adj.newTotal} />
+          </div>
+        );
+      })()}
     </div>
   );
 }
 
 /** Denomination breakdown mini-component */
 function DenominationBreakdown({ denominations, label }: { denominations: any; label: string }) {
-  const BILL_VALUES: Record<string, number> = { hundred: 100, fifty: 50, twenty: 20, ten: 10, five: 5, two: 2, one: 1 };
-  const COIN_VALUES: Record<string, number> = { five: 5, two: 2, one: 1, fifty_cents: 0.5, quarter: 0.25, dime: 0.1 };
+  const BILL_VALUES: Record<string, number> = { hundred: 10000, fifty: 5000, twenty: 2000, ten: 1000, five: 500, one: 100 };
+  const COIN_VALUES: Record<string, number> = { one: 100, fifty_cents: 50, quarter: 25, dime: 10, nickel: 5, penny: 1 };
 
   const entries = [
-    ...Object.entries(denominations.bills).filter(([_, count]) => (count as number) > 0).map(([k, c]) => ({ name: `$${BILL_VALUES[k]}`, count: c as number, value: BILL_VALUES[k] * (c as number) })),
-    ...Object.entries(denominations.coins).filter(([_, count]) => (count as number) > 0).map(([k, c]) => ({ name: `$${COIN_VALUES[k]}`, count: c as number, value: COIN_VALUES[k] * (c as number) })),
+    ...Object.entries(denominations.bills).filter(([_, count]) => (count as number) > 0).map(([k, c]) => ({ name: `$${(BILL_VALUES[k] || 0)/100}`, count: c as number, value: (BILL_VALUES[k] || 0) * (c as number) })),
+    ...Object.entries(denominations.coins).filter(([_, count]) => (count as number) > 0).map(([k, c]) => ({ name: `$${(COIN_VALUES[k] || 0)/100}`, count: c as number, value: (COIN_VALUES[k] || 0) * (c as number) })),
   ];
 
   if (entries.length === 0) return null;
@@ -684,11 +879,123 @@ function DenominationBreakdown({ denominations, label }: { denominations: any; l
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">{label}</p>
       <div className="flex flex-wrap gap-2">
         {entries.map((e, i) => (
-          <span key={i} className="bg-secondary/30 px-2 py-1 rounded text-xs">
+          <span key={e.name} className="bg-secondary/30 px-2 py-1 rounded text-xs">
             {e.name} × {e.count} = {formatCurrency(e.value)}
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Visual diff component for cash adjustments - shows exactly what changed */
+function AdjustmentDiff({ previousDenominations, newDenominations, previousTotal, newTotal }: {
+  previousDenominations: any;
+  newDenominations: any;
+  previousTotal: number;
+  newTotal: number;
+}) {
+  const BILL_LABELS: Record<string, string> = { hundred: '$100', fifty: '$50', twenty: '$20', ten: '$10', five: '$5', one: '$1' };
+  const COIN_LABELS: Record<string, string> = { one: '$1', fifty_cents: '$0.50', quarter: '$0.25', dime: '$0.10', nickel: '$0.05', penny: '$0.01' };
+  const BILL_VALUES: Record<string, number> = { hundred: 10000, fifty: 5000, twenty: 2000, ten: 1000, five: 500, one: 100 };
+  const COIN_VALUES: Record<string, number> = { one: 100, fifty_cents: 50, quarter: 25, dime: 10, nickel: 5, penny: 1 };
+
+  type DiffEntry = {
+    label: string;
+    before: number;
+    after: number;
+    diff: number;
+    unitValue: number;
+  };
+
+  const diffs: DiffEntry[] = [];
+
+  // Bills
+  for (const [key, label] of Object.entries(BILL_LABELS)) {
+    const before = previousDenominations.bills[key] || 0;
+    const after = newDenominations.bills[key] || 0;
+    if (before !== 0 || after !== 0) {
+      diffs.push({ label, before, after, diff: after - before, unitValue: BILL_VALUES[key] || 0 });
+    }
+  }
+  // Coins
+  for (const [key, label] of Object.entries(COIN_LABELS)) {
+    const before = previousDenominations.coins[key] || 0;
+    const after = newDenominations.coins[key] || 0;
+    if (before !== 0 || after !== 0) {
+      diffs.push({ label, before, after, diff: after - before, unitValue: COIN_VALUES[key] || 0 });
+    }
+  }
+
+  const changedDiffs = diffs.filter(d => d.diff !== 0);
+  const unchangedDiffs = diffs.filter(d => d.diff === 0);
+
+  return (
+    <div className="space-y-3">
+      {/* Total change summary */}
+      <div className="flex items-center gap-3 text-xs">
+        <span className="text-muted-foreground">Total:</span>
+        <span className="font-mono font-medium">{formatCurrency(previousTotal)}</span>
+        <span className="text-muted-foreground">→</span>
+        <span className="font-mono font-bold text-foreground">{formatCurrency(newTotal)}</span>
+        {previousTotal !== newTotal && (
+          <span className={`font-mono font-bold px-1.5 py-0.5 rounded ${newTotal > previousTotal ? 'text-success bg-success/10' : 'text-destructive bg-destructive/10'}`}>
+            {newTotal > previousTotal ? '+' : ''}{formatCurrency(newTotal - previousTotal)}
+          </span>
+        )}
+      </div>
+
+      {/* Changed denominations */}
+      {changedDiffs.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Denominaciones Modificadas</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {changedDiffs.map((d) => (
+              <div
+                key={`changed-diff-${d.label}`}
+                className={`flex items-center justify-between px-3 py-2 rounded-md border text-xs ${
+                  d.diff > 0
+                    ? 'bg-success/10 border-success/30'
+                    : 'bg-destructive/10 border-destructive/30'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  {d.diff > 0 ? (
+                    <ArrowUp className="size-3.5 text-success" />
+                  ) : (
+                    <ArrowDown className="size-3.5 text-destructive" />
+                  )}
+                  <span className="font-semibold">{d.label}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-mono">{d.before}</span>
+                  <span className="text-muted-foreground">→</span>
+                  <span className="font-mono font-bold text-foreground">{d.after}</span>
+                  <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[10px] ${
+                    d.diff > 0 ? 'text-success bg-success/20' : 'text-destructive bg-destructive/20'
+                  }`}>
+                    {d.diff > 0 ? '+' : ''}{d.diff}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Unchanged denominations (collapsed, less prominent) */}
+      {unchangedDiffs.length > 0 && (
+        <div>
+          <p className="text-xs text-muted-foreground/60 mb-1">Sin cambios</p>
+          <div className="flex flex-wrap gap-1.5">
+            {unchangedDiffs.map((d) => (
+              <span key={`unchanged-diff-${d.label}`} className="bg-secondary/20 px-2 py-0.5 rounded text-[10px] text-muted-foreground font-mono">
+                {d.label} × {d.after}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

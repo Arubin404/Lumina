@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { Plus, Minus, ListChecks, Wallet, Calculator, Clock, TrendingUp, RefreshCw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,16 +37,15 @@ interface CashBox {
       twenty: number;
       ten: number;
       five: number;
-      two: number;
       one: number;
     };
     coins: {
-      five: number;
-      two: number;
       one: number;
       fifty_cents: number;
       quarter: number;
       dime: number;
+      nickel: number;
+      penny: number;
     };
   };
   totalAmount: number;
@@ -56,6 +56,7 @@ export default function Dashboard() {
   const [showExitModal, setShowExitModal] = useState(false);
   const [showCompleteModal, setShowCompleteModal] = useState(false);
   const [showPhysicalCountModal, setShowPhysicalCountModal] = useState(false);
+  const [, setLocation] = useLocation();
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats"],
@@ -111,17 +112,17 @@ export default function Dashboard() {
             <h2 className="text-2xl font-semibold text-foreground">Dashboard</h2>
             <p className="text-muted-foreground">Gestión de caja en tiempo real</p>
           </div>
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center gap-x-4">
             <div className="text-right">
               <p className="text-sm text-muted-foreground">Fecha actual</p>
-              <p className="text-sm font-medium">{currentDate}</p>
+              <p className="text-sm font-medium" suppressHydrationWarning>{currentDate}</p>
             </div>
             <Button
               onClick={() => setShowIncomeModal(true)}
               className="bg-primary hover:bg-primary/90 text-primary-foreground"
               data-testid="button-new-movement"
             >
-              <Plus className="mr-2 h-4 w-4" />
+              <Plus className="mr-2 size-4" />
               Nuevo Movimiento
             </Button>
           </div>
@@ -141,12 +142,12 @@ export default function Dashboard() {
                     {formatCurrency(stats?.physicalBalance || 0)}
                   </p>
                   <p className="text-success text-sm mt-1">
-                    <span className="inline-block w-2 h-2 bg-success rounded-full mr-1"></span>
+                    <span className="inline-block size-2 bg-success rounded-full mr-1"></span>
                     Sincronizado
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-success/10 rounded-lg flex items-center justify-center">
-                  <Wallet className="text-success h-6 w-6" />
+                <div className="size-12 bg-success/10 rounded-lg flex items-center justify-center">
+                  <Wallet className="text-success size-6" />
                 </div>
               </div>
             </CardContent>
@@ -163,20 +164,20 @@ export default function Dashboard() {
                   </p>
                   {stats && stats.discrepancy === 0 ? (
                     <p className="text-success text-sm mt-1">
-                      <span className="inline-block w-2 h-2 bg-success rounded-full mr-1"></span>
+                      <span className="inline-block size-2 bg-success rounded-full mr-1"></span>
                       Sin diferencias
                     </p>
                   ) : (
                     <p className="text-destructive text-sm mt-1 font-medium bg-destructive/10 inline-block px-2 py-0.5 rounded">
-                      <span className="inline-block w-2 h-2 bg-destructive rounded-full mr-1"></span>
+                      <span className="inline-block size-2 bg-destructive rounded-full mr-1"></span>
                       {stats && stats.discrepancy > 0 
                         ? `Sobrante: ${formatCurrency(stats.discrepancy)}` 
                         : `Faltante: ${formatCurrency(Math.abs(stats?.discrepancy || 0))}`}
                     </p>
                   )}
                 </div>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                  <Calculator className="text-primary h-6 w-6" />
+                <div className="size-12 bg-primary/10 rounded-lg flex items-center justify-center">
+                  <Calculator className="text-primary size-6" />
                 </div>
               </div>
             </CardContent>
@@ -192,12 +193,12 @@ export default function Dashboard() {
                     {stats?.pendingExitsCount || 0}
                   </p>
                   <p className="text-warning text-sm mt-1">
-                    <Clock className="inline mr-1 h-3 w-3" />
+                    <Clock className="inline mr-1 size-3" />
                     {formatCurrency(stats?.transitAmount || stats?.pendingAmount || 0)} con mensajero
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-warning/10 rounded-lg flex items-center justify-center">
-                  <Clock className="text-warning h-6 w-6" />
+                <div className="size-12 bg-warning/10 rounded-lg flex items-center justify-center">
+                  <Clock className="text-warning size-6" />
                 </div>
               </div>
             </CardContent>
@@ -213,12 +214,12 @@ export default function Dashboard() {
                     {formatCurrency(stats?.todayRevenue || 0)}
                   </p>
                   <p className="text-success text-sm mt-1">
-                    <TrendingUp className="inline mr-1 h-3 w-3" />
+                    <TrendingUp className="inline mr-1 size-3" />
                     Día actual
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-success/10 rounded-lg flex items-center justify-center">
-                  <TrendingUp className="text-success h-6 w-6" />
+                <div className="size-12 bg-success/10 rounded-lg flex items-center justify-center">
+                  <TrendingUp className="text-success size-6" />
                 </div>
               </div>
             </CardContent>
@@ -232,12 +233,12 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Button
                 variant="outline"
-                className="flex items-center space-x-3 p-6 h-auto bg-success/10 hover:bg-success/20 border-success/20 justify-start"
+                className="flex items-center gap-x-3 p-6 h-auto bg-success/10 hover:bg-success/20 border-success/20 justify-start"
                 onClick={() => setShowIncomeModal(true)}
                 data-testid="button-register-income"
               >
-                <div className="w-10 h-10 bg-success rounded-lg flex items-center justify-center">
-                  <Plus className="text-white h-5 w-5" />
+                <div className="size-10 bg-success rounded-lg flex items-center justify-center">
+                  <Plus className="text-white size-5" />
                 </div>
                 <div className="text-left">
                   <p className="font-medium text-foreground">Registrar Ingreso</p>
@@ -247,12 +248,12 @@ export default function Dashboard() {
 
               <Button
                 variant="outline"
-                className="flex items-center space-x-3 p-6 h-auto bg-destructive/10 hover:bg-destructive/20 border-destructive/20 justify-start"
+                className="flex items-center gap-x-3 p-6 h-auto bg-destructive/10 hover:bg-destructive/20 border-destructive/20 justify-start"
                 onClick={() => setShowExitModal(true)}
                 data-testid="button-register-exit"
               >
-                <div className="w-10 h-10 bg-destructive rounded-lg flex items-center justify-center">
-                  <Minus className="text-white h-5 w-5" />
+                <div className="size-10 bg-destructive rounded-lg flex items-center justify-center">
+                  <Minus className="text-white size-5" />
                 </div>
                 <div className="text-left">
                   <p className="font-medium text-foreground">Registrar Salida</p>
@@ -262,12 +263,12 @@ export default function Dashboard() {
 
               <Button
                 variant="outline"
-                className="flex items-center space-x-3 p-6 h-auto bg-warning/10 hover:bg-warning/20 border-warning/20 justify-start"
+                className="flex items-center gap-x-3 p-6 h-auto bg-warning/10 hover:bg-warning/20 border-warning/20 justify-start"
                 onClick={() => setShowCompleteModal(true)}
                 data-testid="button-complete-exits"
               >
-                <div className="w-10 h-10 bg-warning rounded-lg flex items-center justify-center">
-                  <ListChecks className="text-warning-foreground h-5 w-5" />
+                <div className="size-10 bg-warning rounded-lg flex items-center justify-center">
+                  <ListChecks className="text-warning-foreground size-5" />
                 </div>
                 <div className="text-left">
                   <p className="font-medium text-foreground">Completar Salidas</p>
@@ -285,7 +286,7 @@ export default function Dashboard() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-foreground">Movimientos Recientes</h3>
-                <Button variant="link" className="text-primary hover:text-primary/80 text-sm font-medium p-0" onClick={() => window.location.href = '/movimientos'}>
+                <Button variant="link" className="text-primary hover:text-primary/80 text-sm font-medium p-0" onClick={() => setLocation('/movimientos')}>
                   Ver todos
                 </Button>
               </div>
@@ -293,12 +294,12 @@ export default function Dashboard() {
                 {stats?.recentMovements?.length ? (
                   stats.recentMovements.map((movement, index) => (
                     <div
-                      key={`${movement.type}-${movement.id}-${index}`}
+                      key={`${movement.type}-${movement.id}`}
                       className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg"
                       data-testid={`movement-${movement.type}-${index}`}
                     >
-                      <div className="flex items-center space-x-3">
-                        <Badge className={`w-8 h-8 rounded-full p-0 ${getMovementBadgeColor(movement.type)}`}>
+                      <div className="flex items-center gap-x-3">
+                        <Badge className={`size-8 rounded-full p-0 ${getMovementBadgeColor(movement.type)}`}>
                           {getMovementIcon(movement.type)}
                         </Badge>
                         <div>
@@ -358,6 +359,14 @@ export default function Dashboard() {
                         <span className="text-sm text-foreground">$10</span>
                         <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.bills.ten}</span>
                       </div>
+                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                        <span className="text-sm text-foreground">$5</span>
+                        <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.bills.five}</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                        <span className="text-sm text-foreground">$1</span>
+                        <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.bills.one}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -365,14 +374,6 @@ export default function Dashboard() {
                   <div>
                     <h4 className="text-sm font-medium text-muted-foreground mb-2">Monedas</h4>
                     <div className="grid grid-cols-3 gap-2">
-                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
-                        <span className="text-sm text-foreground">$5</span>
-                        <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.coins.five}</span>
-                      </div>
-                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
-                        <span className="text-sm text-foreground">$2</span>
-                        <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.coins.two}</span>
-                      </div>
                       <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
                         <span className="text-sm text-foreground">$1</span>
                         <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.coins.one}</span>
@@ -389,6 +390,14 @@ export default function Dashboard() {
                         <span className="text-sm text-foreground">$0.10</span>
                         <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.coins.dime}</span>
                       </div>
+                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                        <span className="text-sm text-foreground">$0.05</span>
+                        <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.coins.nickel}</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                        <span className="text-sm text-foreground">$0.01</span>
+                        <span className="text-sm font-medium text-muted-foreground">{cashBox.denominations.coins.penny}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -398,7 +407,7 @@ export default function Dashboard() {
                     data-testid="button-update-denominations"
                     onClick={() => setShowPhysicalCountModal(true)}
                   >
-                    <RefreshCw className="mr-2 h-4 w-4" />
+                    <RefreshCw className="mr-2 size-4" />
                     Arqueo de Caja
                   </Button>
                 </div>

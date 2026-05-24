@@ -16,11 +16,12 @@ import { Exit, Invoice, ChangeRecord } from "@shared/schema";
 
 interface ExitWithDetails extends Exit {
   invoices?: Invoice[];
-  change?: ChangeRecord;
+  change?: ChangeRecord[];
 }
 
 export default function Salidas() {
   const [showExitModal, setShowExitModal] = useState(false);
+  const [selectedExitForEdit, setSelectedExitForEdit] = useState<Exit | null>(null);
   const [showCompleteModal, setShowCompleteModal] = useState(false);
   const [selectedExitForCompletion, setSelectedExitForCompletion] = useState<string | undefined>(undefined);
   const [showExchangeModal, setShowExchangeModal] = useState(false);
@@ -35,12 +36,12 @@ export default function Salidas() {
   });
 
   const { data: pendingExits, isLoading: pendingLoading } = useQuery<Exit[]>({
-    queryKey: ["/api/exits/pending"],
+    queryKey: ["/api/exits", "pending"],
     refetchInterval: 5000,
   });
 
   const { data: completedExits, isLoading: completedLoading } = useQuery<Exit[]>({
-    queryKey: ["/api/exits/completed"],
+    queryKey: ["/api/exits", "completed"],
     refetchInterval: 10000,
   });
 
@@ -78,8 +79,8 @@ export default function Salidas() {
 
   const pendingCount = pendingExits?.length || 0;
   const completedCount = completedExits?.length || 0;
-  const totalPendingAmount = pendingExits?.reduce((sum, exit) => sum + exit.initialAmount, 0) || 0;
-  const totalCompletedAmount = completedExits?.reduce((sum, exit) => sum + exit.initialAmount, 0) || 0;
+  const totalPendingAmount = pendingExits?.reduce((sum, exit) => sum + (exit.initialAmount - (exit.renderedAmount + exit.changeAmount)), 0) || 0;
+  const totalCompletedAmount = completedExits?.reduce((sum, exit) => sum + (exit.renderedAmount + exit.changeAmount), 0) || 0;
 
   return (
     <>
@@ -89,14 +90,14 @@ export default function Salidas() {
             <h2 className="text-2xl font-semibold text-foreground">Salidas</h2>
             <p className="text-muted-foreground">Gestión de salidas de dinero de caja</p>
           </div>
-          <div className="flex space-x-3">
+          <div className="flex gap-x-3">
             <Button
               onClick={() => setShowExchangeModal(true)}
               variant="outline"
               className="bg-primary/5 hover:bg-primary/10 border-primary/20 text-foreground"
               data-testid="button-cash-exchange"
             >
-              <ArrowLeftRight className="mr-2 h-4 w-4 text-primary" />
+              <ArrowLeftRight className="mr-2 size-4 text-primary" />
               Cambiar Billetes
             </Button>
             <Button
@@ -108,7 +109,7 @@ export default function Salidas() {
               className="bg-warning/10 hover:bg-warning/20 border-warning/20 text-foreground"
               data-testid="button-complete-exits"
             >
-              <CheckCircle className="mr-2 h-4 w-4 text-warning" />
+              <CheckCircle className="mr-2 size-4 text-warning" />
               Completar Pendientes ({pendingCount})
             </Button>
             <Button
@@ -116,7 +117,7 @@ export default function Salidas() {
               className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
               data-testid="button-new-exit"
             >
-              <Minus className="mr-2 h-4 w-4" />
+              <Minus className="mr-2 size-4" />
               Nueva Salida
             </Button>
           </div>
@@ -136,8 +137,8 @@ export default function Salidas() {
                     {formatCurrency(totalPendingAmount)}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-warning/10 rounded-lg flex items-center justify-center">
-                  <Clock className="text-warning h-6 w-6" />
+                <div className="size-12 bg-warning/10 rounded-lg flex items-center justify-center">
+                  <Clock className="text-warning size-6" />
                 </div>
               </div>
             </CardContent>
@@ -153,8 +154,8 @@ export default function Salidas() {
                     {formatCurrency(totalCompletedAmount)}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-success/10 rounded-lg flex items-center justify-center">
-                  <CheckCircle className="text-success h-6 w-6" />
+                <div className="size-12 bg-success/10 rounded-lg flex items-center justify-center">
+                  <CheckCircle className="text-success size-6" />
                 </div>
               </div>
             </CardContent>
@@ -167,11 +168,11 @@ export default function Salidas() {
                   <p className="text-muted-foreground text-sm font-medium">Total Salidas</p>
                   <p className="text-2xl font-bold text-foreground">{allExits?.length || 0}</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    {formatCurrency((allExits?.reduce((sum, exit) => sum + exit.initialAmount, 0)) || 0)}
+                    {formatCurrency((allExits?.reduce((sum, exit) => sum + (exit.renderedAmount + exit.changeAmount), 0)) || 0)}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                  <Minus className="text-primary h-6 w-6" />
+                <div className="size-12 bg-primary/10 rounded-lg flex items-center justify-center">
+                  <Minus className="text-primary size-6" />
                 </div>
               </div>
             </CardContent>
@@ -190,8 +191,8 @@ export default function Salidas() {
                     }).length || 0}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-muted/10 rounded-lg flex items-center justify-center">
-                  <Calendar className="text-muted-foreground h-6 w-6" />
+                <div className="size-12 bg-muted/10 rounded-lg flex items-center justify-center">
+                  <Calendar className="text-muted-foreground size-6" />
                 </div>
               </div>
             </CardContent>
@@ -207,7 +208,7 @@ export default function Salidas() {
                   Buscar por propósito o ID
                 </Label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
                   <Input
                     id="search"
                     value={searchTerm}
@@ -276,6 +277,7 @@ export default function Salidas() {
                           setSelectedExitForCompletion(exit.id);
                           setShowCompleteModal(true);
                         }}
+                        onEdit={() => setSelectedExitForEdit(exit)}
                       />
                     ))}
                   </div>
@@ -286,7 +288,16 @@ export default function Salidas() {
         </Tabs>
       </div>
 
-      <ExitModal open={showExitModal} onOpenChange={setShowExitModal} />
+      <ExitModal 
+        open={showExitModal || !!selectedExitForEdit} 
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowExitModal(false);
+            setSelectedExitForEdit(null);
+          }
+        }} 
+        initialData={selectedExitForEdit}
+      />
       <CompleteExitModal 
         open={showCompleteModal} 
         onOpenChange={setShowCompleteModal} 
@@ -297,15 +308,15 @@ export default function Salidas() {
   );
 }
 
-function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isExpanded: boolean; onToggle: () => void; onComplete: () => void }) {
+function ExitCard({ exit, isExpanded, onToggle, onComplete, onEdit }: { exit: Exit; isExpanded: boolean; onToggle: () => void; onComplete: () => void; onEdit: () => void }) {
   const { data: invoices } = useQuery<Invoice[]>({
-    queryKey: [`/api/exits/${exit.id}/invoices`],
+    queryKey: ["/api/exits", exit.id, "invoices"],
     enabled: isExpanded,
   });
 
   const renderedTotal = (exit.renderedAmount || 0) + (exit.changeAmount || 0);
   const remainingAmount = exit.initialAmount - renderedTotal;
-  const hasPartialProgress = renderedTotal > 0.01 && exit.isPending;
+  const hasPartialProgress = renderedTotal > 0 && exit.isPending;
 
   return (
     <div
@@ -314,9 +325,19 @@ function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isEx
       } ${hasPartialProgress ? 'border-l-blue-500' : ''}`}
       data-testid={`exit-item-${exit.id}`}
     >
-      <div className="p-6 cursor-pointer" onClick={onToggle}>
+      <div 
+        className="p-6 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-t-lg" 
+        onClick={onToggle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            onToggle();
+          }
+        }}
+      >
         <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center gap-x-3">
             <Badge 
               variant="outline" 
               className={`${exit.isPending ? 
@@ -325,12 +346,12 @@ function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isEx
             >
               {exit.isPending ? (
                 <>
-                  <Clock className="mr-1 h-3 w-3" />
+                  <Clock className="mr-1 size-3" />
                   {hasPartialProgress ? 'Parcialmente Rendida' : 'Pendiente'}
                 </>
               ) : (
                 <>
-                  <CheckCircle className="mr-1 h-3 w-3" />
+                  <CheckCircle className="mr-1 size-3" />
                   Completada
                 </>
               )}
@@ -349,7 +370,7 @@ function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isEx
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
           <div>
             <p className="text-muted-foreground">Fecha de Salida</p>
-            <p className="font-medium">{new Date(exit.date).toLocaleDateString()}</p>
+            <p className="font-medium" suppressHydrationWarning>{new Date(exit.date).toLocaleDateString()}</p>
           </div>
           <div>
             <p className="text-muted-foreground">Registrado</p>
@@ -370,7 +391,7 @@ function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isEx
               <span className="text-muted-foreground">Rendición</span>
               <span className="font-medium">
                 {formatCurrency(renderedTotal)} / {formatCurrency(exit.initialAmount)}
-                {remainingAmount > 0.01 && (
+                {remainingAmount > 0 && (
                   <span className="text-warning ml-2">
                     (Faltan {formatCurrency(remainingAmount)})
                   </span>
@@ -396,21 +417,21 @@ function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isEx
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
               {Object.entries(exit.denominationsGiven.bills).map(([denomination, count]) => {
                 if (count === 0) return null;
-                const values: Record<string, number> = { hundred: 100, fifty: 50, twenty: 20, ten: 10, five: 5, two: 2, one: 1 };
+                const values: Record<string, number> = { hundred: 10000, fifty: 5000, twenty: 2000, ten: 1000, five: 500, one: 100 };
                 return (
                   <div key={denomination} className="bg-secondary/30 p-2 rounded text-center">
-                    <p className="font-medium">${values[denomination]} x {count}</p>
-                    <p className="text-muted-foreground">{formatCurrency(values[denomination] * count)}</p>
+                    <p className="font-medium">${values[denomination]/100} x {count}</p>
+                    <p className="text-muted-foreground">{formatCurrency((values[denomination] ?? 0) * (count as number))}</p>
                   </div>
                 );
               })}
               {Object.entries(exit.denominationsGiven.coins).map(([denomination, count]) => {
                 if (count === 0) return null;
-                const values: Record<string, number> = { five: 5, two: 2, one: 1, fifty_cents: 0.5, quarter: 0.25, dime: 0.1 };
+                const values: Record<string, number> = { one: 100, fifty_cents: 50, quarter: 25, dime: 10, nickel: 5, penny: 1 };
                 return (
                   <div key={denomination} className="bg-secondary/30 p-2 rounded text-center">
-                    <p className="font-medium">${values[denomination]} x {count}</p>
-                    <p className="text-muted-foreground">{formatCurrency(values[denomination] * count)}</p>
+                    <p className="font-medium">${values[denomination]/100} x {count}</p>
+                    <p className="text-muted-foreground">{formatCurrency((values[denomination] ?? 0) * (count as number))}</p>
                   </div>
                 );
               })}
@@ -421,7 +442,7 @@ function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isEx
           {invoices && invoices.length > 0 && (
             <div>
               <p className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                <FileText className="h-3.5 w-3.5" /> Facturas ({invoices.length})
+                <FileText className="size-3.5" /> Facturas ({invoices.length})
               </p>
               <div className="space-y-2">
                 {invoices.map((invoice) => (
@@ -433,7 +454,7 @@ function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isEx
                       <span className="font-medium">{invoice.detail}</span>
                     </div>
                     <div className="flex items-center gap-4">
-                      <span className="text-sm text-muted-foreground">{new Date(invoice.date).toLocaleDateString()}</span>
+                      <span className="text-sm text-muted-foreground" suppressHydrationWarning>{new Date(invoice.date).toLocaleDateString()}</span>
                       <span className="font-bold text-destructive">{formatCurrency(invoice.amount)}</span>
                     </div>
                   </div>
@@ -442,17 +463,29 @@ function ExitCard({ exit, isExpanded, onToggle, onComplete }: { exit: Exit; isEx
             </div>
           )}
 
-          {exit.isPending && (
+          <div className="flex gap-x-2 pt-2">
+            {exit.isPending && (
+              <Button
+                onClick={(e) => { e.stopPropagation(); onComplete(); }}
+                size="sm"
+                className="bg-warning hover:bg-warning/90 text-warning-foreground"
+                data-testid={`button-complete-exit-${exit.id}`}
+              >
+                <CheckCircle className="mr-2 size-4" />
+                Completar Salida
+              </Button>
+            )}
             <Button
-              onClick={(e) => { e.stopPropagation(); onComplete(); }}
+              onClick={(e) => { e.stopPropagation(); onEdit(); }}
               size="sm"
-              className="bg-warning hover:bg-warning/90 text-warning-foreground"
-              data-testid={`button-complete-exit-${exit.id}`}
+              variant="outline"
+              className="bg-card hover:bg-accent text-foreground border-border"
+              data-testid={`button-edit-exit-${exit.id}`}
             >
-              <CheckCircle className="mr-2 h-4 w-4" />
-              Completar Salida
+              <FileText className="mr-2 size-4 text-primary" />
+              Editar Salida / Rendición
             </Button>
-          )}
+          </div>
         </div>
       )}
     </div>

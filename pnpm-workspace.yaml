@@ -1,0 +1,7 @@
+# Configuración de PNPM v11 para permitir los scripts de compilación de dependencias de confianza
+allowBuilds:
+  better-sqlite3: true
+  bufferutil: true
+  electron: true
+  electron-winstaller: true
+  esbuild: true

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,7 +18,7 @@ interface CashExchangeModalProps {
 }
 
 export default function CashExchangeModal({ open, onOpenChange }: CashExchangeModalProps) {
-  const [denominationsOut, setDenominationsOut] = useState<Denomination>(createEmptyDenomination());
+  const [denominationsOut, setDenominationsOut] = useState<Denomination>(() => createEmptyDenomination());
   const [denominationsIn, setDenominationsIn] = useState<Denomination>(createEmptyDenomination());
   const [detail, setDetail] = useState("");
   
@@ -58,7 +58,7 @@ export default function CashExchangeModal({ open, onOpenChange }: CashExchangeMo
 
   const totalOut = calculateTotal(denominationsOut);
   const totalIn = calculateTotal(denominationsIn);
-  const isBalanced = Math.abs(totalOut - totalIn) < 0.01;
+  const isBalanced = totalOut === totalIn;
   const difference = totalIn - totalOut;
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -101,9 +101,12 @@ export default function CashExchangeModal({ open, onOpenChange }: CashExchangeMo
       <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ArrowLeftRight className="h-5 w-5" />
+            <ArrowLeftRight className="size-5" />
             Cambio de Billetes (Ferear)
           </DialogTitle>
+          <DialogDescription>
+            Registra un intercambio de billetes/monedas manteniendo el mismo total neto.
+          </DialogDescription>
           <p className="text-sm text-muted-foreground mt-1">
             Registra un cambio de billetes/monedas. El total que sale debe ser igual al total que entra (suma neta = $0).
           </p>
@@ -129,7 +132,7 @@ export default function CashExchangeModal({ open, onOpenChange }: CashExchangeMo
             <Card className="border-destructive/30">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base text-destructive flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-destructive" />
+                  <span className="size-2 rounded-full bg-destructive" />
                   Sale de la Caja
                 </CardTitle>
                 <p className="text-xs text-muted-foreground">Billetes/monedas que entregas</p>
@@ -148,7 +151,7 @@ export default function CashExchangeModal({ open, onOpenChange }: CashExchangeMo
             <Card className="border-success/30">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base text-success flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-success" />
+                  <span className="size-2 rounded-full bg-success" />
                   Entra a la Caja
                 </CardTitle>
                 <p className="text-xs text-muted-foreground">Billetes/monedas que recibes</p>
@@ -173,7 +176,7 @@ export default function CashExchangeModal({ open, onOpenChange }: CashExchangeMo
                     <p className="text-xs text-muted-foreground">Sale</p>
                     <p className="font-semibold text-destructive">{formatCurrency(totalOut)}</p>
                   </div>
-                  <ArrowRight className="h-5 w-5 text-muted-foreground" />
+                  <ArrowRight className="size-5 text-muted-foreground" />
                   <div className="text-center">
                     <p className="text-xs text-muted-foreground">Entra</p>
                     <p className="font-semibold text-success">{formatCurrency(totalIn)}</p>
@@ -189,7 +192,7 @@ export default function CashExchangeModal({ open, onOpenChange }: CashExchangeMo
             </CardContent>
           </Card>
 
-          <div className="flex justify-end space-x-3 pt-4 border-t border-border">
+          <div className="flex justify-end gap-x-3 pt-4 border-t border-border">
             <Button
               type="button"
               variant="outline"
@@ -206,7 +209,7 @@ export default function CashExchangeModal({ open, onOpenChange }: CashExchangeMo
                 "Registrando..."
               ) : (
                 <>
-                  <Save className="mr-2 h-4 w-4" />
+                  <Save className="mr-2 size-4" />
                   Registrar Cambio
                 </>
               )}

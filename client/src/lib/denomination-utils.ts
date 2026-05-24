@@ -6,42 +6,45 @@ export const BILL_VALUES = {
   twenty: 20,
   ten: 10,
   five: 5,
-  two: 2,
   one: 1
 };
 
 export const COIN_VALUES = {
-  five: 5,
-  two: 2,
   one: 1,
-  fifty_cents: 0.5,
+  fifty_cents: 0.50,
   quarter: 0.25,
-  dime: 0.1
+  dime: 0.10,
+  nickel: 0.05,
+  penny: 0.01
 };
 
 export function calculateTotal(denominations: Denomination): number {
   const { bills, coins } = denominations;
   
+  // Return total in cents (integer)
   const billsTotal = Object.entries(bills).reduce((sum, [key, count]) => {
     const value = BILL_VALUES[key as keyof typeof BILL_VALUES];
-    return sum + (value * count);
+    return sum + (value * 100 * count);
   }, 0);
   
   const coinsTotal = Object.entries(coins).reduce((sum, [key, count]) => {
-    const value = COIN_VALUES[key as keyof typeof COIN_VALUES];
+    const value = Math.round(COIN_VALUES[key as keyof typeof COIN_VALUES] * 100);
     return sum + (value * count);
   }, 0);
   
-  return billsTotal + coinsTotal;
+  return Math.round(billsTotal + coinsTotal);
 }
 
-export function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('es-ES', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(amount);
+const currencyFormatter = new Intl.NumberFormat('es-ES', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+});
+
+export function formatCurrency(amountCents: number): string {
+  // Amount comes from server as integer (cents)
+  return currencyFormatter.format(amountCents / 100);
 }
 
 export function createEmptyDenomination(): Denomination {
@@ -52,16 +55,15 @@ export function createEmptyDenomination(): Denomination {
       twenty: 0,
       ten: 0,
       five: 0,
-      two: 0,
       one: 0
     },
     coins: {
-      five: 0,
-      two: 0,
       one: 0,
       fifty_cents: 0,
       quarter: 0,
-      dime: 0
+      dime: 0,
+      nickel: 0,
+      penny: 0
     }
   };
 }

@@ -1,11 +1,16 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Settings, Hash, AlertTriangle, Save, RotateCcw } from "lucide-react";
+import { Hash, AlertTriangle, Save, RotateCcw, Upload, Info, CheckCircle2, FolderOpen, ShieldCheck, Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Configuration, UpdateConfig } from "@shared/schema";
@@ -13,32 +18,66 @@ import { Configuration, UpdateConfig } from "@shared/schema";
 export default function Configuracion() {
   const [nextVoucherNumber, setNextVoucherNumber] = useState<number | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  
+  const [fileToImport, setFileToImport] = useState<File | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [showImportWarning, setShowImportWarning] = useState(false);
+
+  const [storeName, setStoreName] = useState("");
+  const [currencyPrefix, setCurrencyPrefix] = useState("$");
+  const [taxId, setTaxId] = useState("");
+  const [editWindowDays, setEditWindowDays] = useState(20);
+  const [confirmBeforeEdit, setConfirmBeforeEdit] = useState(true);
+  const [editHistory, setEditHistory] = useState(true);
+  const [lockClosedPeriods, setLockClosedPeriods] = useState(false);
+  const [backupPath, setBackupPath] = useState("");
+  const [backupOnClose, setBackupOnClose] = useState(false);
+  const [backupOnSave, setBackupOnSave] = useState(true);
+  const [backupRetention, setBackupRetention] = useState(30);
+  const [retentionEnabled, setRetentionEnabled] = useState(true);
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [dbFileToRestore, setDbFileToRestore] = useState<File | null>(null);
+  const [isRestoringDb, setIsRestoringDb] = useState(false);
+  const [showRestoreWarning, setShowRestoreWarning] = useState(false);
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const { data: config, isLoading } = useQuery<Configuration>({
     queryKey: ["/api/configuration"],
+    refetchInterval: 3000,
   });
 
-  // Use useEffect to handle data updates
   useEffect(() => {
-    if (config && nextVoucherNumber === null) {
+    if (config && !hasUnsavedChanges) {
       setNextVoucherNumber(config.nextVoucherNumber);
+      if (config.storeName !== undefined) setStoreName(config.storeName);
+      if (config.currencyPrefix !== undefined) setCurrencyPrefix(config.currencyPrefix);
+      if (config.taxId !== undefined) setTaxId(config.taxId);
+      if (config.editWindowDays !== undefined) setEditWindowDays(config.editWindowDays);
+      if (config.confirmBeforeEdit !== undefined) setConfirmBeforeEdit(config.confirmBeforeEdit);
+      if (config.editHistory !== undefined) setEditHistory(config.editHistory);
+      if (config.lockClosedPeriods !== undefined) setLockClosedPeriods(config.lockClosedPeriods);
+      if (config.backupPath !== undefined) setBackupPath(config.backupPath);
+      if (config.backupOnClose !== undefined) setBackupOnClose(config.backupOnClose);
+      if (config.backupOnSave !== undefined) setBackupOnSave(config.backupOnSave);
+      if (config.backupRetention !== undefined) setBackupRetention(config.backupRetention);
+      if (config.retentionEnabled !== undefined) setRetentionEnabled(config.retentionEnabled);
     }
-  }, [config, nextVoucherNumber]);
+  }, [config, hasUnsavedChanges]);
 
   const updateConfigMutation = useMutation({
     mutationFn: async (configData: UpdateConfig) => {
       const response = await apiRequest("PUT", "/api/configuration", configData);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (updatedConfig) => {
       toast({
         title: "Configuración actualizada",
         description: "Los cambios se han guardado correctamente",
       });
+      queryClient.setQueryData(["/api/configuration"], updatedConfig);
       queryClient.invalidateQueries({ queryKey: ["/api/configuration"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/configuration/next-voucher"] });
       setHasUnsavedChanges(false);
     },
     onError: (error) => {
@@ -50,24 +89,192 @@ export default function Configuracion() {
     },
   });
 
+  const markDirty = () => setHasUnsavedChanges(true);
+
   const handleVoucherNumberChange = (value: string) => {
-    const numValue = parseInt(value) || 1;
+    const numValue = parseInt(value, 10) || 1;
     setNextVoucherNumber(Math.max(1, numValue));
-    setHasUnsavedChanges(true);
+    markDirty();
   };
 
   const handleSave = () => {
     if (nextVoucherNumber === null) return;
-    
-    updateConfigMutation.mutate({
+    updateConfigMutation.mutate({ 
       nextVoucherNumber,
+      storeName,
+      currencyPrefix,
+      taxId,
+      editWindowDays,
+      confirmBeforeEdit,
+      editHistory,
+      lockClosedPeriods,
+      backupPath,
+      backupOnClose,
+      backupOnSave,
+      backupRetention,
+      retentionEnabled
     });
   };
 
   const handleReset = () => {
-    if (config) {
-      setNextVoucherNumber(config.nextVoucherNumber);
-      setHasUnsavedChanges(false);
+    if (!config) return;
+    setNextVoucherNumber(config.nextVoucherNumber);
+    setStoreName(config.storeName ?? "");
+    setCurrencyPrefix(config.currencyPrefix ?? "$");
+    setTaxId(config.taxId ?? "");
+    setEditWindowDays(config.editWindowDays ?? 20);
+    setConfirmBeforeEdit(config.confirmBeforeEdit ?? true);
+    setEditHistory(config.editHistory ?? true);
+    setLockClosedPeriods(config.lockClosedPeriods ?? false);
+    setBackupPath(config.backupPath ?? "");
+    setBackupOnClose(config.backupOnClose ?? false);
+    setBackupOnSave(config.backupOnSave ?? true);
+    setBackupRetention(config.backupRetention ?? 30);
+    setRetentionEnabled(config.retentionEnabled ?? true);
+    setHasUnsavedChanges(false);
+  };
+
+  const handleSelectDirectory = async () => {
+    const api = (window as any).electronAPI;
+    if (!api) return;
+    const selectedPath = await api.selectDirectory();
+    if (selectedPath) {
+      setBackupPath(selectedPath);
+      markDirty();
+    }
+  };
+
+  const handleBackupNow = async () => {
+    let currentPath = backupPath;
+    const api = (window as any).electronAPI;
+
+    if (!currentPath || currentPath.trim() === "") {
+      if (api) {
+        const selectedPath = await api.selectDirectory();
+        if (!selectedPath) {
+          toast({
+            title: "Backup cancelado",
+            description: "Debe seleccionar una carpeta para el respaldo contable.",
+            variant: "destructive",
+          });
+          return;
+        }
+        currentPath = selectedPath;
+        setBackupPath(selectedPath);
+        // Save configuration immediately so it is persisted
+        updateConfigMutation.mutate({ backupPath: selectedPath });
+      } else {
+        toast({
+          title: "Ruta de respaldo requerida",
+          description: "Por favor, especifique una ruta de respaldo antes de continuar.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    setIsBackingUp(true);
+    try {
+      if (api) {
+        const result = await api.backupNow(currentPath);
+        if (result?.success) {
+          toast({ title: "Backup creado", description: result.externalPath ? `Copia guardada en ruta externa.` : "Copia interna creada exitosamente." });
+        } else {
+          toast({ title: "Error de Backup", description: result?.error || "Error desconocido", variant: "destructive" });
+        }
+      } else {
+        // Web fallback via server API
+        const res = await fetch("/api/backup/now", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ backupPath: currentPath })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          toast({ title: "Backup creado", description: "Copia de seguridad generada exitosamente." });
+        } else {
+          toast({ title: "Error de Backup", description: data.message, variant: "destructive" });
+        }
+      }
+    } catch (e: any) {
+      toast({ title: "Error de Backup", description: e.message, variant: "destructive" });
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setFileToImport(e.target.files[0]);
+    }
+  };
+
+  const handleDbFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setDbFileToRestore(e.target.files[0]);
+    }
+  };
+
+  const handleRestoreDb = async () => {
+    if (!dbFileToRestore) return;
+    setIsRestoringDb(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", dbFileToRestore);
+      const response = await fetch(`/api/import-db`, { method: "POST", body: formData });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Error al restaurar base de datos");
+
+      toast({
+        title: "Base de Datos Restaurada",
+        description: "El sistema ha sido restaurado exitosamente desde la copia de seguridad.",
+      });
+      // Invalidate all query data immediately to reload the app states
+      queryClient.invalidateQueries();
+      setDbFileToRestore(null);
+      setShowRestoreWarning(false);
+      const fileInput = document.getElementById("dbFile") as HTMLInputElement;
+      if (fileInput) fileInput.value = "";
+    } catch (error: any) {
+      toast({
+        title: "Error de Restauración",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsRestoringDb(false);
+    }
+  };
+
+  const [importMode, setImportMode] = useState<'replace' | 'append'>('replace');
+
+  const handleImport = async () => {
+    if (!fileToImport) return;
+    setIsImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", fileToImport);
+      const response = await fetch(`/api/import-excel?mode=${importMode}`, { method: "POST", body: formData });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Error al importar");
+
+      toast({
+        title: "Importación Exitosa",
+        description: `Se importaron ${data.totalIncomes} ingresos y ${data.totalExits} salidas correctamente (${importMode === 'replace' ? 'Reemplazo' : 'Anexo'}).`,
+      });
+      queryClient.invalidateQueries();
+      setFileToImport(null);
+      setShowImportWarning(false);
+      const fileInput = document.getElementById("excelFile") as HTMLInputElement;
+      if (fileInput) fileInput.value = "";
+    } catch (error: any) {
+      toast({
+        title: "Error de Importación",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -81,260 +288,290 @@ export default function Configuracion() {
 
   const willCreateDuplicates = config && nextVoucherNumber !== null && nextVoucherNumber < config.nextVoucherNumber;
   const hasSignificantJump = config && nextVoucherNumber !== null && nextVoucherNumber > (config.nextVoucherNumber + 100);
+  const liveVoucher = `#${(nextVoucherNumber ?? 1).toString().padStart(4, "0")}`;
+
+  const riskCopy =
+    editWindowDays <= 7
+      ? "Riesgo bajo - recomendado para entornos auditados"
+      : editWindowDays <= 20
+        ? "Riesgo moderado - valido para uso general"
+        : "Riesgo alto - permite editar historial financiero extenso";
+
+  const riskColor =
+    editWindowDays <= 7
+      ? "text-emerald-500"
+      : editWindowDays <= 20
+        ? "text-amber-500"
+        : "text-destructive";
 
   return (
-    <>
+    <TooltipProvider>
       <div className="bg-card border-b border-border px-8 py-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-semibold text-foreground">Configuración</h2>
-            <p className="text-muted-foreground">Configuración del sistema de caja</p>
+            <p className="text-muted-foreground">Sistema de Caja · Profesional</p>
           </div>
-          <div className="flex space-x-3">
+          <div className="flex gap-x-3">
             {hasUnsavedChanges && (
-              <Button
-                onClick={handleReset}
-                variant="outline"
-                disabled={updateConfigMutation.isPending}
-                data-testid="button-reset-config"
-              >
-                <RotateCcw className="mr-2 h-4 w-4" />
+              <Button onClick={handleReset} variant="outline" disabled={updateConfigMutation.isPending} data-testid="button-reset-config">
+                <RotateCcw className="mr-2 size-4" />
                 Descartar
               </Button>
             )}
-            <Button
-              onClick={handleSave}
-              disabled={!hasUnsavedChanges || updateConfigMutation.isPending}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground"
-              data-testid="button-save-config"
-            >
-              {updateConfigMutation.isPending ? (
-                "Guardando..."
-              ) : (
-                <>
-                  <Save className="mr-2 h-4 w-4" />
-                  Guardar Cambios
-                </>
-              )}
+            <Button onClick={handleSave} disabled={!hasUnsavedChanges || updateConfigMutation.isPending} className="bg-primary hover:bg-primary/90" data-testid="button-save-config">
+              <Save className="mr-2 size-4" />
+              {updateConfigMutation.isPending ? "Guardando..." : "Guardar cambios"}
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="p-8 space-y-6">
-        {/* Current Configuration Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-muted-foreground text-sm font-medium">Próximo Voucher</p>
-                  <p className="text-2xl font-bold text-foreground">
-                    #{config?.nextVoucherNumber.toString().padStart(4, "0")}
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Actualmente configurado
-                  </p>
-                </div>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                  <Hash className="text-primary h-6 w-6" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-muted-foreground text-sm font-medium">Última Actualización</p>
-                  <p className="text-lg font-bold text-foreground">
-                    {config ? new Date(config.lastUpdated).toLocaleDateString() : "-"}
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {config ? new Date(config.lastUpdated).toLocaleTimeString() : ""}
-                  </p>
-                </div>
-                <div className="w-12 h-12 bg-muted/10 rounded-lg flex items-center justify-center">
-                  <Settings className="text-muted-foreground h-6 w-6" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-muted-foreground text-sm font-medium">Estado</p>
-                  <p className="text-lg font-bold text-success">Activo</p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Sistema funcionando
-                  </p>
-                </div>
-                <div className="w-12 h-12 bg-success/10 rounded-lg flex items-center justify-center">
-                  <div className="w-3 h-3 bg-success rounded-full"></div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+      <div className="p-8 max-w-5xl mx-auto space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wider text-muted-foreground">Próximo Voucher</p><p className="text-2xl font-semibold text-primary mt-2">{liveVoucher}</p><p className="text-xs text-muted-foreground mt-1">Actualmente configurado</p></CardContent></Card>
+          <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wider text-muted-foreground">Última Actualización</p><p className="text-base font-semibold mt-2" suppressHydrationWarning>{config ? new Date(config.lastUpdated).toLocaleDateString() : "-"}</p><p className="text-xs text-muted-foreground mt-1" suppressHydrationWarning>{config ? new Date(config.lastUpdated).toLocaleTimeString() : ""}</p></CardContent></Card>
+          <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wider text-muted-foreground">Estado del Sistema</p><div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400 mt-2"><span className="size-2 rounded-full bg-emerald-400" />Activo · v1.0</div><p className="text-xs text-muted-foreground mt-2">Base de datos local</p></CardContent></Card>
         </div>
 
-        {/* Voucher Configuration */}
+        <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Vouchers</p>
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <Hash className="mr-2 h-5 w-5" />
-              Configuración de Vouchers
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="bg-primary/10 rounded-lg p-4 border border-primary/20">
-              <h4 className="font-semibold text-primary mb-2">¿Cómo funcionan los vouchers?</h4>
-              <ul className="text-sm text-primary space-y-1">
-                <li>• Cada factura o salida completada recibe un número de voucher único y consecutivo</li>
-                <li>• Los ingresos también reciben vouchers para mantener trazabilidad completa</li>
-                <li>• La secuencia es configurable para continuar desde un número específico</li>
-                <li>• Los vouchers se muestran en reportes Excel y en la interfaz del sistema</li>
-              </ul>
+          <CardContent className="p-5 flex items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 font-medium">Próximo número de voucher <Hint text="Cada movimiento completado recibe un número único y consecutivo. Si el último fue #0150, escribe 151." /></div>
+              <p className="text-sm text-muted-foreground">La secuencia avanzará a partir de este número.</p>
             </div>
+            <div className="flex items-center gap-3">
+              <div className="text-xl font-mono text-primary">{liveVoucher}</div>
+              <Input type="number" min="1" value={nextVoucherNumber ?? 1} onChange={(e) => handleVoucherNumberChange(e.target.value)} className="w-24 text-center" data-testid="input-voucher-number" />
+            </div>
+          </CardContent>
+        </Card>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <p className="text-[11px] uppercase tracking-widest text-muted-foreground flex items-center gap-2">Identidad del negocio <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30">Nuevo</Badge></p>
+        <Card>
+          <CardContent className="p-5 space-y-4">
+            <div><Label className="font-medium">Nombre del establecimiento <Hint text="Se incluye en encabezados de reportes exportados." /></Label><p className="text-xs text-muted-foreground mb-2">Se muestra en reportes y documentos exportados.</p><Input value={storeName} onChange={(e) => { setStoreName(e.target.value); markDirty(); }} placeholder="Ej: Farmacia Central, S.A." /></div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div><Label className="font-medium">Prefijo de moneda <Hint text="Solo cambia presentación en reportes exportados." /></Label><p className="text-xs text-muted-foreground mb-2">Símbolo mostrado en reportes exportados.</p><Select value={currencyPrefix} onValueChange={(v) => { setCurrencyPrefix(v); markDirty(); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="$">$ (Dólar - USD)</SelectItem><SelectItem value="US$">US$ (Dólar Internacional)</SelectItem><SelectItem value="B/.">B/. (Balboa Panameño)</SelectItem><SelectItem value="PAB">PAB (Código ISO)</SelectItem><SelectItem value="€">€ (Euro)</SelectItem></SelectContent></Select></div>
+              <div><Label className="font-medium">RUC / NIT <Badge variant="outline" className="ml-2 text-[10px]">Opcional</Badge></Label><p className="text-xs text-muted-foreground mb-2">Pie de página en reportes fiscales.</p><Input value={taxId} onChange={(e) => { setTaxId(e.target.value); markDirty(); }} placeholder="Ej: 123-456-789 DV 00" /></div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <p className="text-[11px] uppercase tracking-widest text-muted-foreground flex items-center gap-2">Políticas de auditoría <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30">Nuevo</Badge></p>
+        <Card><CardContent className="p-5 space-y-5">
+          <div><div className="flex items-center gap-2 font-medium">Margen de edición de registros <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/30">Seguridad</Badge> <Hint text="Días hacia atrás que un usuario puede editar un movimiento." /></div><p className={`text-sm ${riskColor} font-medium mt-1`}>{riskCopy}</p><div className="mt-3 flex items-center gap-4"><Slider min={1} max={60} step={1} value={[editWindowDays]} onValueChange={(v) => { setEditWindowDays(v[0]); markDirty(); }} /><span className="text-primary font-mono text-sm w-16 text-right">{editWindowDays} días</span></div></div>
+          <ToggleRow label="Confirmar antes de editar" hint="Diálogo de confirmación en cada modificación." checked={confirmBeforeEdit} onChange={(v) => { setConfirmBeforeEdit(v); markDirty(); }} />
+          <ToggleRow label="Historial de ediciones" hint="Registra quién editó, cuándo y qué cambió." checked={editHistory} onChange={(v) => { setEditHistory(v); markDirty(); }} />
+          <ToggleRow label="Bloquear períodos cerrados" hint="Impide editar meses con reporte mensual generado." checked={lockClosedPeriods} onChange={(v) => { setLockClosedPeriods(v); markDirty(); }} />
+        </CardContent></Card>
+
+        <p className="text-[11px] uppercase tracking-widest text-muted-foreground flex items-center gap-2">Seguridad de datos <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30">Nuevo</Badge></p>
+        <Card><CardContent className="p-5 space-y-5">
+          <div><Label className="font-medium">Ruta de respaldo automático <Hint text="Recomendado: carpeta sincronizada en nube para redundancia." /></Label><p className="text-xs text-muted-foreground mb-2">Recomendado: carpeta de Google Drive o Dropbox.</p><div className="flex gap-2"><Input value={backupPath} onChange={(e) => { setBackupPath(e.target.value); markDirty(); }} placeholder="C:\\Users\\...\\Google Drive\\Backups\\Caja" /><Button variant="outline" type="button" onClick={handleSelectDirectory} className="shrink-0 gap-2"><FolderOpen className="size-4" />Examinar...</Button></div></div>
+          <ToggleRow label="Backup al cerrar la app" hint="Copia automática al salir del sistema." checked={backupOnClose} onChange={(v) => { setBackupOnClose(v); markDirty(); }} />
+          <ToggleRow label="Backup al guardar cambios" hint="Copia adicional al presionar Guardar cambios." checked={backupOnSave} onChange={(v) => { setBackupOnSave(v); markDirty(); }} />
+          <div className="flex items-end justify-between gap-4"><div><Label className="font-medium">Retención de copias</Label><p className="text-xs text-muted-foreground mb-2">Número máximo de respaldos a conservar.</p><Input type="number" min="5" max="365" value={backupRetention} onChange={(e) => { setBackupRetention(Math.max(5, parseInt(e.target.value, 10) || 5)); markDirty(); }} className="w-32" /></div><Switch checked={retentionEnabled} onCheckedChange={(v) => { setRetentionEnabled(v); markDirty(); }} /></div>
+          <div className="pt-1 border-t border-border">
+            <div className="flex items-center justify-between">
               <div>
-                <Label htmlFor="voucherNumber" className="text-sm font-medium text-foreground">
-                  Próximo Número de Voucher
-                </Label>
-                <div className="mt-2">
-                  <Input
-                    id="voucherNumber"
-                    type="number"
-                    min="1"
-                    value={nextVoucherNumber || ""}
-                    onChange={(e) => handleVoucherNumberChange(e.target.value)}
-                    placeholder="Número del próximo voucher"
-                    disabled={updateConfigMutation.isPending}
-                    data-testid="input-voucher-number"
-                  />
-                </div>
-                <p className="text-sm text-muted-foreground mt-1">
-                  El próximo voucher será: #{nextVoucherNumber?.toString().padStart(4, "0") || "0001"}
-                </p>
+                <p className="font-medium flex items-center gap-2"><ShieldCheck className="size-4 text-primary" />Crear backup ahora</p>
+                <p className="text-xs text-muted-foreground">Genera una copia de seguridad inmediata de la base de datos.</p>
               </div>
-
-              <div className="space-y-4">
-                <div className="bg-muted/30 rounded-lg p-4">
-                  <h4 className="font-medium text-foreground mb-2">Ejemplo de Uso:</h4>
-                  <p className="text-sm text-muted-foreground">
-                    Si el último voucher utilizado fue el #0150, configure el próximo número como 151 
-                    para continuar la secuencia sin saltos.
-                  </p>
-                </div>
-              </div>
+              <Button variant="outline" onClick={handleBackupNow} disabled={isBackingUp} className="gap-2 shrink-0">
+                <Database className="size-4" />
+                {isBackingUp ? "Creando copia..." : "Backup ahora"}
+              </Button>
             </div>
+          </div>
+        </CardContent></Card>
 
-            {/* Validation Warnings */}
-            {willCreateDuplicates && (
+        <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Sistema</p>
+        <Card><CardContent className="p-0 grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border">
+          <InfoCell k="Versión" v="v1.0.3" />
+          <InfoCell k="Sincronización" v="Desactivada (Sincronización remota Firebase pendiente)" />
+          <InfoCell k="Modo de operación" v="Escritorio · Windows" />
+          <InfoCell k="Almacenamiento" v="Local · sin conexión requerida" />
+          <InfoCell k="Exportación" v="Excel / ODS disponible" />
+          <InfoCell k="Backup del SO" v="Configurable desde sistema operativo" />
+        </CardContent></Card>
+
+        <p className="text-[11px] uppercase tracking-widest text-destructive">Mantenimiento de Datos</p>
+        <Card className={importMode === 'replace' ? "border-destructive/30" : "border-primary/30"}>
+          <CardContent className="p-5 space-y-4">
+            {importMode === 'replace' ? (
               <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
+                <AlertTriangle className="size-4" />
                 <AlertDescription>
-                  <strong>Advertencia:</strong> El número configurado ({nextVoucherNumber}) es menor al actual ({config?.nextVoucherNumber}). 
-                  Esto podría crear vouchers duplicados. Verifique que este cambio sea intencional.
+                  <strong>Modo Reemplazar:</strong> Esta acción borrará TODO el historial actual (Ingresos, Salidas, Facturas) y lo sustituirá por el contenido del Excel.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert className="border-primary/30 bg-primary/10 text-primary">
+                <Info className="size-4" />
+                <AlertDescription>
+                  <strong>Modo Anexar:</strong> Los registros del Excel se añadirán al historial existente sin borrar nada. Útil para cargar meses nuevos.
                 </AlertDescription>
               </Alert>
             )}
 
-            {hasSignificantJump && (
-              <Alert className="border-warning bg-warning/10">
-                <AlertTriangle className="h-4 w-4 text-warning" />
-                <AlertDescription className="text-warning">
-                  <strong>Atención:</strong> Hay un salto significativo en la numeración 
-                  (de {config?.nextVoucherNumber} a {nextVoucherNumber}). 
-                  Esto creará un vacío en la secuencia de vouchers.
-                </AlertDescription>
-              </Alert>
-            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label className="font-medium text-xs uppercase tracking-wider mb-2 block">Modo de Mantenimiento</Label>
+                <Select value={importMode} onValueChange={(v: 'replace' | 'append') => setImportMode(v)}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="replace">Reemplazar Base de Datos (Limpiar todo)</SelectItem>
+                    <SelectItem value="append">Anexar a Base de Datos (Sumar registros)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1">
+                <Label htmlFor="excelFile" className="font-medium text-xs uppercase tracking-wider mb-2 block">Archivo ODS / XLSX</Label>
+                <Input id="excelFile" type="file" accept=".ods,.xlsx" onChange={handleFileChange} disabled={isImporting} />
+                <p className="text-[10px] text-muted-foreground mt-1">{fileToImport ? fileToImport.name : "Sin archivos seleccionados"}</p>
+              </div>
+            </div>
 
-            {hasUnsavedChanges && !willCreateDuplicates && !hasSignificantJump && (
-              <Alert className="border-primary bg-primary/10">
-                <Settings className="h-4 w-4 text-primary" />
-                <AlertDescription className="text-primary">
-                  Tienes cambios sin guardar. Haz clic en "Guardar Cambios" para aplicar la nueva configuración.
-                </AlertDescription>
-              </Alert>
-            )}
+            <div className="flex justify-end pt-2">
+              {!showImportWarning ? (
+                <Button 
+                  variant={importMode === 'replace' ? "destructive" : "secondary"} 
+                  onClick={() => setShowImportWarning(true)} 
+                  disabled={!fileToImport || isImporting}
+                >
+                  <Upload className="mr-2 size-4" /> 
+                  {importMode === 'replace' ? "Iniciar Reemplazo" : "Iniciar Anexo"}
+                </Button>
+              ) : (
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setShowImportWarning(false)} disabled={isImporting}>Cancelar</Button>
+                  <Button 
+                    variant={importMode === 'replace' ? "destructive" : "secondary"} 
+                    onClick={handleImport} 
+                    disabled={isImporting}
+                  >
+                    {isImporting ? "Procesando..." : (importMode === 'replace' ? "Sí, borrar e importar" : "Confirmar anexo")}
+                  </Button>
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
 
-        {/* System Information */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Información del Sistema</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <div>
-                  <Label className="text-sm font-medium text-foreground">Versión del Sistema</Label>
-                  <p className="text-sm text-muted-foreground mt-1">Sistema de Caja Profesional v1.0</p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium text-foreground">Modo de Operación</Label>
-                  <p className="text-sm text-muted-foreground mt-1">Aplicación de escritorio (Windows)</p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium text-foreground">Almacenamiento</Label>
-                  <p className="text-sm text-muted-foreground mt-1">Base de datos local (Sin conexión requerida)</p>
-                </div>
+        <p className="text-[11px] uppercase tracking-widest text-destructive flex items-center gap-2">Restauración de Base de Datos <Badge className="bg-destructive/10 text-destructive border-destructive/30">Crítico</Badge></p>
+        <Card className="border-destructive/30">
+          <CardContent className="p-5 space-y-4">
+            <Alert variant="destructive">
+              <AlertTriangle className="size-4" />
+              <AlertDescription>
+                <strong>Atención:</strong> Al restaurar una copia de seguridad (.db), se <strong>sobrescribirá por completo</strong> el estado actual de la caja y todos los registros con el contenido del archivo de respaldo. Esta acción no se puede deshacer.
+              </AlertDescription>
+            </Alert>
+
+            <div className="flex flex-col md:flex-row gap-4 items-end">
+              <div className="flex-1 w-full">
+                <Label htmlFor="dbFile" className="font-medium text-xs uppercase tracking-wider mb-2 block">Archivo de Respaldo (.db)</Label>
+                <Input id="dbFile" type="file" accept=".db" onChange={handleDbFileChange} disabled={isRestoringDb} />
+                <p className="text-[10px] text-muted-foreground mt-1">{dbFileToRestore ? dbFileToRestore.name : "Sin archivo seleccionado"}</p>
               </div>
-              
-              <div className="space-y-4">
-                <div>
-                  <Label className="text-sm font-medium text-foreground">Sincronización</Label>
-                  <p className="text-sm text-success mt-1">✓ Tiempo real activo</p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium text-foreground">Backup Automático</Label>
-                  <p className="text-sm text-muted-foreground mt-1">Configurar desde el sistema operativo</p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium text-foreground">Exportación</Label>
-                  <p className="text-sm text-muted-foreground mt-1">Reportes Excel disponibles</p>
-                </div>
+              <div className="shrink-0">
+                {!showRestoreWarning ? (
+                  <Button 
+                    variant="destructive" 
+                    onClick={() => setShowRestoreWarning(true)} 
+                    disabled={!dbFileToRestore || isRestoringDb}
+                  >
+                    <RotateCcw className="mr-2 size-4" /> 
+                    Restaurar Base de Datos
+                  </Button>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setShowRestoreWarning(false)} disabled={isRestoringDb}>Cancelar</Button>
+                    <Button 
+                      variant="destructive" 
+                      onClick={handleRestoreDb} 
+                      disabled={isRestoringDb}
+                    >
+                      {isRestoringDb ? "Restaurando..." : "Sí, sobrescribir todo"}
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* Best Practices */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Mejores Prácticas</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="bg-success/10 rounded-lg p-4 border border-success/20">
-                <h4 className="font-semibold text-success mb-2">Recomendaciones de Seguridad</h4>
-                <ul className="text-sm text-success space-y-1">
-                  <li>• Realice respaldos regulares de los datos del sistema</li>
-                  <li>• Verifique el balance físico vs teórico diariamente</li>
-                  <li>• Complete las salidas pendientes al final de cada día</li>
-                  <li>• Genere reportes mensuales para auditoría</li>
-                </ul>
-              </div>
-
-              <div className="bg-warning/10 rounded-lg p-4 border border-warning/20">
-                <h4 className="font-semibold text-warning mb-2">Advertencias Importantes</h4>
-                <ul className="text-sm text-warning space-y-1">
-                  <li>• No modifique la configuración de vouchers sin planificación previa</li>
-                  <li>• Los cambios en la numeración afectan la secuencia permanentemente</li>
-                  <li>• Mantenga registro manual de cambios importantes</li>
-                  <li>• Revise movimientos editados regularmente</li>
-                </ul>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        {willCreateDuplicates && (
+          <Alert variant="destructive">
+            <AlertTriangle className="size-4" />
+            <AlertDescription>
+              El número configurado ({nextVoucherNumber}) es menor al actual ({config?.nextVoucherNumber}) y puede causar duplicados.
+            </AlertDescription>
+          </Alert>
+        )}
+        {hasSignificantJump && (
+          <Alert className="border-amber-500/30 bg-amber-500/10 text-amber-300">
+            <AlertTriangle className="size-4" />
+            <AlertDescription>
+              Hay un salto amplio en la secuencia (de {config?.nextVoucherNumber} a {nextVoucherNumber}).
+            </AlertDescription>
+          </Alert>
+        )}
+        {!willCreateDuplicates && !hasSignificantJump && hasUnsavedChanges && (
+          <Alert className="border-primary/30 bg-primary/10 text-primary">
+            <CheckCircle2 className="size-4" />
+            <AlertDescription>Tienes cambios listos para guardar.</AlertDescription>
+          </Alert>
+        )}
       </div>
-    </>
+    </TooltipProvider>
+  );
+}
+
+function Hint({ text }: { text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" className="inline-flex size-4 items-center justify-center rounded-full border border-border text-muted-foreground hover:text-primary">
+          <Info className="size-3" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs text-xs">{text}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ToggleRow({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div>
+        <p className="font-medium">{label}</p>
+        <p className="text-xs text-muted-foreground">{hint}</p>
+      </div>
+      <Switch checked={checked} onCheckedChange={onChange} />
+    </div>
+  );
+}
+
+function InfoCell({ k, v, good }: { k: string; v: string; good?: boolean }) {
+  return (
+    <div className="p-4">
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{k}</p>
+      <p className={`text-sm mt-1 ${good ? "text-emerald-400" : "text-foreground"}`}>{v}</p>
+    </div>
   );
 }
