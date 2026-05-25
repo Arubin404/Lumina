@@ -172,51 +172,97 @@ class SqliteStorage implements IStorage {
     return voucher;
   }
 
-  private shiftVouchersForward(tx: any, startVoucherId: number) {
+  private displaceVouchers(tx: any, oldVoucherId: number | null | undefined, newVoucherId: number) {
+    if (!oldVoucherId) {
+      // Insertion: Shift all vouchers >= newVoucherId forward by 1 (+1)
+      this.shiftVouchersRange(tx, newVoucherId, null, 1);
+    } else if (newVoucherId < oldVoucherId) {
+      // Case A: Moving backward (e.g., 194 -> 192).
+      // Shift range [newVoucherId, oldVoucherId - 1] forward by 1 (+1).
+      this.shiftVouchersRange(tx, newVoucherId, oldVoucherId - 1, 1);
+    } else if (newVoucherId > oldVoucherId) {
+      // Case B: Moving forward (e.g., 192 -> 194).
+      // Shift range [oldVoucherId + 1, newVoucherId] backward by 1 (-1).
+      this.shiftVouchersRange(tx, oldVoucherId + 1, newVoucherId, -1);
+    }
+  }
+
+  private shiftVouchersRange(tx: any, minVal: number, maxVal: number | null, delta: number) {
+    if (delta === 0) return;
+
+    // Build the query filters
+    const incomesFilter = maxVal !== null 
+      ? and(gte(schema.incomes.voucherId, minVal), lt(schema.incomes.voucherId, maxVal + 1))
+      : gte(schema.incomes.voucherId, minVal);
+
+    const invoicesFilter = maxVal !== null 
+      ? and(gte(schema.invoices.voucherId, minVal), lt(schema.invoices.voucherId, maxVal + 1))
+      : gte(schema.invoices.voucherId, minVal);
+
+    const exitsFilter = maxVal !== null 
+      ? and(gte(schema.exits.voucherId, minVal), lt(schema.exits.voucherId, maxVal + 1))
+      : gte(schema.exits.voucherId, minVal);
+
     // 1. Temporarily negate matching positive voucher_ids to avoid unique constraint violations
     tx.update(schema.incomes)
       .set({ voucherId: sql`(-voucher_id)` })
-      .where(gte(schema.incomes.voucherId, startVoucherId))
+      .where(incomesFilter)
       .run();
 
     tx.update(schema.invoices)
       .set({ voucherId: sql`(-voucher_id)` })
-      .where(gte(schema.invoices.voucherId, startVoucherId))
+      .where(invoicesFilter)
       .run();
 
     tx.update(schema.exits)
       .set({ voucherId: sql`(-voucher_id)` })
-      .where(gte(schema.exits.voucherId, startVoucherId))
+      .where(exitsFilter)
       .run();
 
-    // 2. Set them to positive incremented values (negative value * -1 + 1)
+    // 2. Set them to positive incremented/decremented values (negative value * -1 + delta)
+    const setSql = delta > 0 ? sql`(-voucher_id + ${delta})` : sql`(-voucher_id - ${-delta})`;
+
     tx.update(schema.incomes)
-      .set({ voucherId: sql`(-voucher_id + 1)` })
+      .set({ voucherId: setSql })
       .where(lt(schema.incomes.voucherId, 0))
       .run();
 
     tx.update(schema.invoices)
-      .set({ voucherId: sql`(-voucher_id + 1)` })
+      .set({ voucherId: setSql })
       .where(lt(schema.invoices.voucherId, 0))
       .run();
 
     tx.update(schema.exits)
-      .set({ voucherId: sql`(-voucher_id + 1)` })
+      .set({ voucherId: setSql })
       .where(lt(schema.exits.voucherId, 0))
       .run();
 
-    // 3. Ensure the next sequence in config is always larger than any shifted or manually set voucher ID
+    // 3. Ensure next_voucher_number in configuration is updated to always be greater than any voucher_id
     const [config] = tx.select().from(schema.configuration).limit(1).all();
     if (config) {
-      const currentNext = config.nextVoucherNumber;
-      const proposedNext = Math.max(currentNext + 1, startVoucherId + 1);
-      tx.update(schema.configuration)
-        .set({ 
-          nextVoucherNumber: proposedNext,
-          lastUpdated: new Date()
-        })
-        .where(eq(schema.configuration.id, config.id))
-        .run();
+      // Find the new max voucher number across all tables to sync correctly
+      const [[maxIncome], [maxInvoice], [maxExit]] = [
+        tx.select({ val: sql<number>`max(voucher_id)` }).from(schema.incomes).all(),
+        tx.select({ val: sql<number>`max(voucher_id)` }).from(schema.invoices).all(),
+        tx.select({ val: sql<number>`max(voucher_id)` }).from(schema.exits).all()
+      ];
+      
+      const dbMax = Math.max(
+        Number(maxIncome?.val || 0),
+        Number(maxInvoice?.val || 0),
+        Number(maxExit?.val || 0)
+      );
+
+      const proposedNext = dbMax + 1;
+      if (proposedNext !== config.nextVoucherNumber) {
+        tx.update(schema.configuration)
+          .set({ 
+            nextVoucherNumber: proposedNext,
+            lastUpdated: new Date()
+          })
+          .where(eq(schema.configuration.id, config.id))
+          .run();
+      }
     }
   }
 
@@ -349,7 +395,7 @@ class SqliteStorage implements IStorage {
       const oldVoucherId = oldIncome.voucherId;
       const newVoucherId = newIncomeData.voucherId;
       if (newVoucherId !== undefined && newVoucherId !== oldVoucherId) {
-        this.shiftVouchersForward(tx, newVoucherId);
+        this.displaceVouchers(tx, oldVoucherId, newVoucherId);
       }
 
       const [updatedIncome] = tx.update(schema.incomes)
@@ -517,7 +563,7 @@ class SqliteStorage implements IStorage {
             const newInvVoucher = inv.voucherId;
             
             if (newInvVoucher !== undefined && newInvVoucher !== oldInvVoucher) {
-              this.shiftVouchersForward(tx, newInvVoucher);
+              this.displaceVouchers(tx, oldInvVoucher, newInvVoucher);
             }
 
             tx.update(schema.invoices)
