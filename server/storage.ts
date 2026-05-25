@@ -172,6 +172,54 @@ class SqliteStorage implements IStorage {
     return voucher;
   }
 
+  private shiftVouchersForward(tx: any, startVoucherId: number) {
+    // 1. Temporarily negate matching positive voucher_ids to avoid unique constraint violations
+    tx.update(schema.incomes)
+      .set({ voucherId: sql`(-voucher_id)` })
+      .where(gte(schema.incomes.voucherId, startVoucherId))
+      .run();
+
+    tx.update(schema.invoices)
+      .set({ voucherId: sql`(-voucher_id)` })
+      .where(gte(schema.invoices.voucherId, startVoucherId))
+      .run();
+
+    tx.update(schema.exits)
+      .set({ voucherId: sql`(-voucher_id)` })
+      .where(gte(schema.exits.voucherId, startVoucherId))
+      .run();
+
+    // 2. Set them to positive incremented values (negative value * -1 + 1)
+    tx.update(schema.incomes)
+      .set({ voucherId: sql`(-voucher_id + 1)` })
+      .where(lt(schema.incomes.voucherId, 0))
+      .run();
+
+    tx.update(schema.invoices)
+      .set({ voucherId: sql`(-voucher_id + 1)` })
+      .where(lt(schema.invoices.voucherId, 0))
+      .run();
+
+    tx.update(schema.exits)
+      .set({ voucherId: sql`(-voucher_id + 1)` })
+      .where(lt(schema.exits.voucherId, 0))
+      .run();
+
+    // 3. Ensure the next sequence in config is always larger than any shifted or manually set voucher ID
+    const [config] = tx.select().from(schema.configuration).limit(1).all();
+    if (config) {
+      const currentNext = config.nextVoucherNumber;
+      const proposedNext = Math.max(currentNext + 1, startVoucherId + 1);
+      tx.update(schema.configuration)
+        .set({ 
+          nextVoucherNumber: proposedNext,
+          lastUpdated: new Date()
+        })
+        .where(eq(schema.configuration.id, config.id))
+        .run();
+    }
+  }
+
   private addDenominations(a: Denomination, b: Denomination): Denomination {
     return {
       bills: {
@@ -298,12 +346,19 @@ class SqliteStorage implements IStorage {
           .run();
       }
 
+      const oldVoucherId = oldIncome.voucherId;
+      const newVoucherId = newIncomeData.voucherId;
+      if (newVoucherId !== undefined && newVoucherId !== oldVoucherId) {
+        this.shiftVouchersForward(tx, newVoucherId);
+      }
+
       const [updatedIncome] = tx.update(schema.incomes)
         .set({
           detail: newIncomeData.detail,
           date: newIncomeData.date,
           denominations: newIncomeData.denominations,
           totalAmount,
+          ...(newVoucherId !== undefined ? { voucherId: newVoucherId } : {}),
           editedAt: new Date()
         })
         .where(eq(schema.incomes.id, id))
@@ -456,11 +511,21 @@ class SqliteStorage implements IStorage {
         // Create or update invoices
         for (const inv of newExitData.invoices) {
           if (inv.id) {
+            // Get old invoice to check if voucherId changed
+            const [oldInv] = tx.select().from(schema.invoices).where(eq(schema.invoices.id, inv.id)).all();
+            const oldInvVoucher = oldInv?.voucherId;
+            const newInvVoucher = inv.voucherId;
+            
+            if (newInvVoucher !== undefined && newInvVoucher !== oldInvVoucher) {
+              this.shiftVouchersForward(tx, newInvVoucher);
+            }
+
             tx.update(schema.invoices)
               .set({
                 detail: inv.detail,
                 amount: inv.amount,
-                date: inv.date
+                date: inv.date,
+                ...(newInvVoucher !== undefined ? { voucherId: newInvVoucher } : {})
               })
               .where(eq(schema.invoices.id, inv.id))
               .run();
