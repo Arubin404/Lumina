@@ -542,12 +542,17 @@ class SqliteStorage implements IStorage {
       if (!isEditingDetailsOnly && newExitData.invoices) {
         const newInvoiceIds = new Set(newExitData.invoices.map(inv => inv.id).filter(Boolean) as string[]);
         
+        // Fetch original invoices first before any deletions or shifts to isolate explicit user updates
+        const originalInvoices = tx.select().from(schema.invoices).where(eq(schema.invoices.exitId, id)).all();
+        const originalInvoicesMap = new Map<string, any>(
+          originalInvoices.map(inv => [inv.id, inv])
+        );
+
         // Delete invoices not present in the new list
         if (newInvoiceIds.size === 0) {
           tx.delete(schema.invoices).where(eq(schema.invoices.exitId, id)).run();
         } else {
-          const oldInvoices = tx.select().from(schema.invoices).where(eq(schema.invoices.exitId, id)).all();
-          for (const oldInv of oldInvoices) {
+          for (const oldInv of originalInvoices) {
             if (!newInvoiceIds.has(oldInv.id)) {
               tx.delete(schema.invoices).where(eq(schema.invoices.id, oldInv.id)).run();
             }
@@ -557,12 +562,12 @@ class SqliteStorage implements IStorage {
         // Create or update invoices
         for (const inv of newExitData.invoices) {
           if (inv.id) {
-            // Get old invoice to check if voucherId changed
-            const [oldInv] = tx.select().from(schema.invoices).where(eq(schema.invoices.id, inv.id)).all();
+            const oldInv = originalInvoicesMap.get(inv.id);
             const oldInvVoucher = oldInv?.voucherId;
             const newInvVoucher = inv.voucherId;
             
-            if (newInvVoucher !== undefined && newInvVoucher !== oldInvVoucher) {
+            const isVoucherExplicitlyChanged = newInvVoucher !== undefined && newInvVoucher !== oldInvVoucher;
+            if (isVoucherExplicitlyChanged) {
               this.displaceVouchers(tx, oldInvVoucher, newInvVoucher);
             }
 
@@ -571,7 +576,7 @@ class SqliteStorage implements IStorage {
                 detail: inv.detail,
                 amount: inv.amount,
                 date: inv.date,
-                ...(newInvVoucher !== undefined ? { voucherId: newInvVoucher } : {})
+                ...(isVoucherExplicitlyChanged ? { voucherId: newInvVoucher } : {})
               })
               .where(eq(schema.invoices.id, inv.id))
               .run();
