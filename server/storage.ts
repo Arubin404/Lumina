@@ -21,7 +21,7 @@ import {
   type UpdateExit
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, sql, and, gte, lt } from "drizzle-orm";
+import { eq, desc, sql, and, gte, lt, lte } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 interface IStorage {
@@ -222,19 +222,31 @@ class SqliteStorage implements IStorage {
     // 2. Set them to positive incremented/decremented values (negative value * -1 + delta)
     const setSql = delta > 0 ? sql`(-voucher_id + ${delta})` : sql`(-voucher_id - ${-delta})`;
 
+    const restoreIncomesFilter = maxVal !== null 
+      ? and(lte(schema.incomes.voucherId, -minVal), gte(schema.incomes.voucherId, -maxVal))
+      : lte(schema.incomes.voucherId, -minVal);
+
+    const restoreInvoicesFilter = maxVal !== null 
+      ? and(lte(schema.invoices.voucherId, -minVal), gte(schema.invoices.voucherId, -maxVal))
+      : lte(schema.invoices.voucherId, -minVal);
+
+    const restoreExitsFilter = maxVal !== null 
+      ? and(lte(schema.exits.voucherId, -minVal), gte(schema.exits.voucherId, -maxVal))
+      : lte(schema.exits.voucherId, -minVal);
+
     tx.update(schema.incomes)
       .set({ voucherId: setSql })
-      .where(lt(schema.incomes.voucherId, 0))
+      .where(restoreIncomesFilter)
       .run();
 
     tx.update(schema.invoices)
       .set({ voucherId: setSql })
-      .where(lt(schema.invoices.voucherId, 0))
+      .where(restoreInvoicesFilter)
       .run();
 
     tx.update(schema.exits)
       .set({ voucherId: setSql })
-      .where(lt(schema.exits.voucherId, 0))
+      .where(restoreExitsFilter)
       .run();
 
     // 3. Ensure next_voucher_number in configuration is updated to always be greater than any voucher_id
@@ -395,6 +407,12 @@ class SqliteStorage implements IStorage {
       const oldVoucherId = oldIncome.voucherId;
       const newVoucherId = newIncomeData.voucherId;
       if (newVoucherId !== undefined && newVoucherId !== oldVoucherId) {
+        // Temporarily set the edited record's voucherId to a negative value to vacate the positive spot
+        tx.update(schema.incomes)
+          .set({ voucherId: -oldVoucherId })
+          .where(eq(schema.incomes.id, id))
+          .run();
+
         this.displaceVouchers(tx, oldVoucherId, newVoucherId);
       }
 
@@ -567,7 +585,13 @@ class SqliteStorage implements IStorage {
             const newInvVoucher = inv.voucherId;
             
             const isVoucherExplicitlyChanged = newInvVoucher !== undefined && newInvVoucher !== oldInvVoucher;
-            if (isVoucherExplicitlyChanged) {
+            if (isVoucherExplicitlyChanged && oldInvVoucher) {
+              // Temporarily set this invoice's voucherId to a negative value to vacate the positive spot
+              tx.update(schema.invoices)
+                .set({ voucherId: -oldInvVoucher })
+                .where(eq(schema.invoices.id, inv.id))
+                .run();
+
               this.displaceVouchers(tx, oldInvVoucher, newInvVoucher);
             }
 
