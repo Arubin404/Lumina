@@ -18,6 +18,7 @@ import { generateExcelReport } from "./export";
 import { processExcelImport } from "./import-service";
 import { performBackup } from "./backup-service";
 import Database from "better-sqlite3";
+import { sqlite, runMigrations } from "./db";
 import path from "path";
 import fs from "fs";
 import os from "os";
@@ -495,6 +496,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Atomically copy all tables and pages into main database
         await tempDb.backup(mainDbPath);
         tempDb.close();
+
+        // Self-heal and migrate the restored database immediately to the latest schema
+        runMigrations(sqlite);
 
         // Invalidate cache by syncing voucher sequences
         await storage.syncNextVoucherNumber();

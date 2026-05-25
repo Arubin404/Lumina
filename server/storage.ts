@@ -912,7 +912,14 @@ class SqliteStorage implements IStorage {
   }
 
   async syncNextVoucherNumber(): Promise<number> {
-    const config = await this.getConfiguration();
+    let config = await this.getConfiguration();
+    if (!config) {
+      const [inserted] = await db.insert(schema.configuration).values({
+        nextVoucherNumber: 1,
+        lastUpdated: new Date()
+      }).returning().all();
+      config = inserted;
+    }
     const [[maxIncome], [maxInvoice], [maxExit]] = await Promise.all([
       db.select({ val: sql<number>`max(voucher_id)` }).from(schema.incomes),
       db.select({ val: sql<number>`max(voucher_id)` }).from(schema.invoices),
