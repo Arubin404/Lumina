@@ -38,12 +38,12 @@ export default function ExitModal({ open, onOpenChange, initialData }: ExitModal
   const queryClient = useQueryClient();
 
   // Queries to load invoices and change when editing
-  const { data: exitInvoices } = useQuery<Invoice[]>({
+  const { data: exitInvoices, isFetching: isFetchingInvoices } = useQuery<Invoice[]>({
     queryKey: ["/api/exits", initialData?.id, "invoices"],
     enabled: open && !!initialData?.id,
   });
 
-  const { data: exitChange } = useQuery<any[]>({
+  const { data: exitChange, isFetching: isFetchingChange } = useQuery<any[]>({
     queryKey: ["/api/exits", initialData?.id, "change"],
     enabled: open && !!initialData?.id,
   });
@@ -72,9 +72,9 @@ export default function ExitModal({ open, onOpenChange, initialData }: ExitModal
     }
   }, [open, initialData]);
 
-  // Synchronize loaded invoices and change once both are loaded exactly once per dialog open
+  // Synchronize loaded invoices and change once both are loaded exactly once per dialog open and NOT currently fetching
   useEffect(() => {
-    if (open && initialData && exitInvoices && exitChange && !hasLoadedData) {
+    if (open && initialData && exitInvoices && exitChange && !isFetchingInvoices && !isFetchingChange && !hasLoadedData) {
       setInvoices(exitInvoices.map(inv => ({
         localId: crypto.randomUUID(),
         id: inv.id,
@@ -92,7 +92,7 @@ export default function ExitModal({ open, onOpenChange, initialData }: ExitModal
       }
       setHasLoadedData(true);
     }
-  }, [open, initialData, exitInvoices, exitChange, hasLoadedData]);
+  }, [open, initialData, exitInvoices, exitChange, isFetchingInvoices, isFetchingChange, hasLoadedData]);
 
   const { data: cashBox } = useQuery<CashBox>({
     queryKey: ["/api/cashbox"],

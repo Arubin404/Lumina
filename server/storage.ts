@@ -92,6 +92,9 @@ class SqliteStorage implements IStorage {
         lastUpdated: new Date()
       });
     }
+
+    // Always synchronize the voucher number sequence with actual database records on startup
+    await this.syncNextVoucherNumber();
   }
 
   // ─── HELPERS ─────────────────────────────────────────────
@@ -301,7 +304,6 @@ class SqliteStorage implements IStorage {
           date: newIncomeData.date,
           denominations: newIncomeData.denominations,
           totalAmount,
-          ...(newIncomeData.voucherId !== undefined ? { voucherId: newIncomeData.voucherId } : {}),
           editedAt: new Date()
         })
         .where(eq(schema.incomes.id, id))
@@ -458,8 +460,7 @@ class SqliteStorage implements IStorage {
               .set({
                 detail: inv.detail,
                 amount: inv.amount,
-                date: inv.date,
-                ...(inv.voucherId !== undefined ? { voucherId: inv.voucherId } : {})
+                date: inv.date
               })
               .where(eq(schema.invoices.id, inv.id))
               .run();
