@@ -194,6 +194,8 @@ export function runMigrations(dbInstance: any) {
   runSafeAlter(dbInstance, `ALTER TABLE exits ADD COLUMN rendered_amount INTEGER NOT NULL DEFAULT 0;`);
   runSafeAlter(dbInstance, `ALTER TABLE exits ADD COLUMN change_amount INTEGER NOT NULL DEFAULT 0;`);
   runSafeAlter(dbInstance, `ALTER TABLE exits ADD COLUMN voucher_id INTEGER;`);
+  runSafeAlter(dbInstance, `ALTER TABLE configuration ADD COLUMN next_voucher_number INTEGER NOT NULL DEFAULT 1;`);
+  runSafeAlter(dbInstance, `ALTER TABLE configuration ADD COLUMN last_updated INTEGER NOT NULL DEFAULT 0;`);
   runSafeAlter(dbInstance, `ALTER TABLE configuration ADD COLUMN current_voucher_year INTEGER NOT NULL DEFAULT 2025;`);
   runSafeAlter(dbInstance, `ALTER TABLE configuration ADD COLUMN store_name TEXT NOT NULL DEFAULT '';`);
   runSafeAlter(dbInstance, `ALTER TABLE configuration ADD COLUMN currency_prefix TEXT NOT NULL DEFAULT '$';`);
