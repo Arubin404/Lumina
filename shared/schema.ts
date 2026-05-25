@@ -25,9 +25,21 @@ export const denominationSchema = z.object({
 
 export type Denomination = z.infer<typeof denominationSchema>;
 
+const safeRandomUUID = () => {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback pure JS implementation
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
 // Cash box state - tracks current physical denominations
 export const cashBox = sqliteTable("cash_box", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   denominations: text("denominations", { mode: 'json' }).$type<Denomination>().notNull(),
   totalAmount: integer("total_amount").notNull().default(0),
   lastUpdated: integer("last_updated", { mode: 'timestamp' }).notNull()
@@ -35,7 +47,7 @@ export const cashBox = sqliteTable("cash_box", {
 
 // Income records
 export const incomes = sqliteTable("incomes", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   voucherId: integer("voucher_id").notNull().unique(),
   detail: text("detail").notNull(),
   denominations: text("denominations", { mode: 'json' }).$type<Denomination>().notNull(),
@@ -47,7 +59,7 @@ export const incomes = sqliteTable("incomes", {
 
 // Exit records (can be pending, partial, or completed)
 export const exits = sqliteTable("exits", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   voucherId: integer("voucher_id").unique(),
   purpose: text("purpose").notNull(),
   initialAmount: integer("initial_amount").notNull(),
@@ -63,7 +75,7 @@ export const exits = sqliteTable("exits", {
 
 // Invoices for exits (can be added incrementally)
 export const invoices = sqliteTable("invoices", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   exitId: text("exit_id").notNull().references(() => exits.id),
   voucherId: integer("voucher_id").notNull().unique(),
   detail: text("detail").notNull(),
@@ -74,7 +86,7 @@ export const invoices = sqliteTable("invoices", {
 
 // Change given back during exit completion
 export const changeRecords = sqliteTable("change_records", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   exitId: text("exit_id").notNull().references(() => exits.id),
   denominations: text("denominations", { mode: 'json' }).$type<Denomination>().notNull(),
   totalAmount: integer("total_amount").notNull(),
@@ -83,7 +95,7 @@ export const changeRecords = sqliteTable("change_records", {
 
 // Cash exchanges (ferear - swap bills without changing total)
 export const cashExchanges = sqliteTable("cash_exchanges", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   denominationsIn: text("denominations_in", { mode: 'json' }).$type<Denomination>().notNull(),
   denominationsOut: text("denominations_out", { mode: 'json' }).$type<Denomination>().notNull(),
   totalAmount: integer("total_amount").notNull(),
@@ -93,7 +105,7 @@ export const cashExchanges = sqliteTable("cash_exchanges", {
 
 // Cash adjustments (arqueo de caja audit trail)
 export const cashAdjustments = sqliteTable("cash_adjustments", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   previousDenominations: text("previous_denominations", { mode: 'json' }).$type<Denomination>().notNull(),
   newDenominations: text("new_denominations", { mode: 'json' }).$type<Denomination>().notNull(),
   previousTotal: integer("previous_total").notNull(),
@@ -104,7 +116,7 @@ export const cashAdjustments = sqliteTable("cash_adjustments", {
 
 // System configuration
 export const configuration = sqliteTable("configuration", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   nextVoucherNumber: integer("next_voucher_number").notNull().default(1),
   currentVoucherYear: integer("current_voucher_year").notNull().default(2025),
   storeName: text("store_name").notNull().default(""),
@@ -124,7 +136,7 @@ export const configuration = sqliteTable("configuration", {
 
 // Audit Logs for Edit History
 export const auditLogs = sqliteTable("audit_logs", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   entityId: text("entity_id").notNull(),
   entityType: text("entity_type").notNull(), // 'income' or 'exit'
   action: text("action").notNull(), // 'edit', 'delete'
@@ -135,7 +147,7 @@ export const auditLogs = sqliteTable("audit_logs", {
 
 // Closed accounting periods
 export const closedPeriods = sqliteTable("closed_periods", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   year: integer("year").notNull(),
   month: integer("month").notNull(),
   closedAt: integer("closed_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())
@@ -246,7 +258,7 @@ export type ClosedPeriod = typeof closedPeriods.$inferSelect;
 
 // User schema (keeping existing structure)
 export const users = sqliteTable("users", {
-  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  id: text("id").primaryKey().$defaultFn(() => safeRandomUUID()),
   username: text("username").notNull().unique(),
   password: text("password").notNull(),
 });

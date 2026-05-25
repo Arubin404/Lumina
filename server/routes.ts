@@ -268,7 +268,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const config = await storage.getConfiguration();
       res.json(config);
     } catch (error) {
-      res.status(500).json({ message: "Failed to get configuration" });
+      console.error("Error in GET /api/configuration:", error);
+      res.status(500).json({ message: error instanceof Error ? error.message : "Failed to get configuration" });
     }
   });
 
@@ -279,7 +280,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Return the already-synced next voucher number from config (no mutation)
       res.json({ nextVoucherNumber: config.nextVoucherNumber });
     } catch (error) {
-      res.status(500).json({ message: "Failed to get next voucher" });
+      console.error("Error in GET /api/configuration/next-voucher:", error);
+      res.status(500).json({ message: error instanceof Error ? error.message : "Failed to get next voucher" });
     }
   });
 
