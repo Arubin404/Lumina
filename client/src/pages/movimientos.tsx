@@ -70,7 +70,7 @@ export default function Movimientos() {
   const queryClient = useQueryClient();
 
   const { data: config } = useQuery<Configuration>({
-    queryKey: ["/api/config"],
+    queryKey: ["/api/configuration"],
   });
 
   const { data: closedPeriods } = useQuery<ClosedPeriod[]>({

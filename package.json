@@ -1,13 +1,13 @@
 {
   "name": "caja-lumina",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "license": "MIT",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "cross-env NODE_ENV=development pnpm exec tsx server/index.ts",
     "build:app": "vite build && esbuild server/index.ts --platform=node --bundle --format=cjs --outfile=dist/index.cjs --alias:@shared=./shared --external:better-sqlite3 --external:vite --external:lightningcss --external:esbuild --external:@replit/vite-plugin-cartographer --external:@replit/vite-plugin-dev-banner --external:@replit/vite-plugin-runtime-error-modal",
-    "build": "pnpm run build:app && pnpm exec rimraf release && pnpm exec electron-rebuild -f -w better-sqlite3 && electron-builder && pnpm rebuild better-sqlite3",
+    "build": "pnpm run build:app && pnpm exec rimraf release-build && pnpm exec electron-rebuild -f -w better-sqlite3 && electron-builder && pnpm rebuild better-sqlite3",
     "pack": "electron-builder --dir",
     "start": "concurrently \"cross-env NODE_ENV=development pnpm exec tsx server/index.ts\" \"wait-on http://localhost:5000 && electron .\"",
     "start:web": "cross-env NODE_ENV=development pnpm exec tsx server/index.ts",
@@ -19,7 +19,7 @@
     "appId": "com.cajalumina.app",
     "productName": "Caja Lumina",
     "directories": {
-      "output": "release"
+      "output": "release-build"
     },
     "files": [
       "dist/**/*",

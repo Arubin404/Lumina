@@ -331,7 +331,7 @@ export default function Configuracion() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wider text-muted-foreground">Próximo Voucher</p><p className="text-2xl font-semibold text-primary mt-2">{liveVoucher}</p><p className="text-xs text-muted-foreground mt-1">Actualmente configurado</p></CardContent></Card>
           <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wider text-muted-foreground">Última Actualización</p><p className="text-base font-semibold mt-2" suppressHydrationWarning>{config ? new Date(config.lastUpdated).toLocaleDateString() : "-"}</p><p className="text-xs text-muted-foreground mt-1" suppressHydrationWarning>{config ? new Date(config.lastUpdated).toLocaleTimeString() : ""}</p></CardContent></Card>
-          <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wider text-muted-foreground">Estado del Sistema</p><div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400 mt-2"><span className="size-2 rounded-full bg-emerald-400" />Activo · v1.0</div><p className="text-xs text-muted-foreground mt-2">Base de datos local</p></CardContent></Card>
+          <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wider text-muted-foreground">Estado del Sistema</p><div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400 mt-2"><span className="size-2 rounded-full bg-emerald-400" />Activo · v1.0.4</div><p className="text-xs text-muted-foreground mt-2">Base de datos local</p></CardContent></Card>
         </div>
 
         <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Vouchers</p>
@@ -389,7 +389,7 @@ export default function Configuracion() {
 
         <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Sistema</p>
         <Card><CardContent className="p-0 grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border">
-          <InfoCell k="Versión" v="v1.0.3" />
+          <InfoCell k="Versión" v="v1.0.4" />
           <InfoCell k="Sincronización" v="Desactivada (Sincronización remota Firebase pendiente)" />
           <InfoCell k="Modo de operación" v="Escritorio · Windows" />
           <InfoCell k="Almacenamiento" v="Local · sin conexión requerida" />

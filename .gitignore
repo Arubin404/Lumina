@@ -10,6 +10,7 @@ server/public/
 
 # ─── Electron distributable releases ────────────────────────
 release/
+release-build/
 
 # ─── Database files (sensitive runtime data) ────────────────
 *.db
@@ -40,6 +41,7 @@ vite.config.ts.*
 # ─── OS files ───────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+.local/
 
 # ─── Lumina.png if it's a test asset (add back if intentional)
 # Lumina.png
